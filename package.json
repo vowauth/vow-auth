@@ -1,0 +1,38 @@
+{
+	"name": "vow-auth",
+	"version": "0.0.0",
+	"private": true,
+	"description": "",
+	"type": "module",
+	"license": "MIT",
+	"packageManager": "pnpm@12.10.1+sha512.ba40a37eb1a370d60fea8c4cf1d364c13bcccef518e98ad2bcee954f539d38da37458e58261a3fa55e06523450ea0ffff9f497b135be41f2c15c1642bacace6c",
+	"engines": {
+		"node": ">=22.11"
+	},
+	"scripts": {
+		"build": "pnpm --filter \"./packages/*\" --fail-if-no-match run build",
+		"test": "pnpm build && pnpm typecheck:packages && vitest run",
+		"test:watch": "vitest",
+		"test:coverage": "vitest run --coverage",
+		"typecheck": "pnpm typecheck:packages && pnpm --filter \"./examples/*\" typecheck",
+		"typecheck:packages": "tsc -p tsconfig.json --noEmit",
+		"format": "biome format --write .",
+		"check": "biome check .",
+		"knip": "knip",
+		"prepare": "simple-git-hooks"
+	},
+	"keywords": [],
+	"author": "",
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.15",
+		"@types/node": "^26.6.4",
+		"knip": "^6.40.0",
+		"simple-git-hooks": "^2.14.0",
+		"typescript": "^6.0.3",
+		"vitest": "^5.0.3"
+	},
+	"simple-git-hooks": {
+		"pre-commit": "pnpm exec biome check --staged --no-errors-on-unmatched",
+		"pre-push": "pnpm test"
+	}
+}

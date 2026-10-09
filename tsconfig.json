@@ -1,0 +1,16 @@
+{
+	"extends": "./tsconfig.base.json",
+	"compilerOptions": {
+		"jsx": "react-jsx",
+		"paths": {
+			"@vow-auth/core": ["./packages/core/src/index.ts"]
+		}
+	},
+	"include": [
+		"vitest.alias.ts",
+		"vitest.config.ts",
+		"packages/**/*.ts",
+		"packages/**/*.tsx"
+	],
+	"exclude": ["node_modules", "**/dist"]
+}

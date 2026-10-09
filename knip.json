@@ -1,0 +1,12 @@
+{
+	"$schema": "https://unpkg.com/knip@6/schema.json",
+	"tags": ["-lintignore"],
+	"ignoreDependencies": ["publint", "@arethetypeswrong/cli"],
+	"ignore": ["examples/**"],
+	"workspaces": {
+		".": {}
+	},
+	"vitest": {
+		"entry": ["packages/*/tests/**/*.{test,test-d,bench}.{ts,tsx}"]
+	}
+}
