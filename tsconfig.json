@@ -6,11 +6,6 @@
 			"@vow-auth/core": ["./packages/core/src/index.ts"]
 		}
 	},
-	"include": [
-		"vitest.alias.ts",
-		"vitest.config.ts",
-		"packages/**/*.ts",
-		"packages/**/*.tsx"
-	],
+	"include": ["vitest.config.ts", "packages/**/*.ts", "packages/**/*.tsx"],
 	"exclude": ["node_modules", "**/dist"]
 }
