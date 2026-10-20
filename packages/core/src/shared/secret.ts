@@ -1,0 +1,25 @@
+const SECRET_BYTES = 32;
+
+export const SECRET_LENGTH = SECRET_BYTES * 2;
+
+const HEX_BYTE_TABLE: readonly string[] = Array.from(
+	{ length: 256 },
+	(_, byte) => byte.toString(16).padStart(2, "0"),
+);
+
+const toHex = (bytes: Uint8Array): string => {
+	return Array.from(bytes, (byte) => HEX_BYTE_TABLE[byte]).join("");
+};
+
+export const generateSecret = (): string => {
+	return toHex(crypto.getRandomValues(new Uint8Array(SECRET_BYTES)));
+};
+
+export const hashSecret = async (secret: string): Promise<string> => {
+	const digest = await crypto.subtle.digest(
+		"SHA-256",
+		new TextEncoder().encode(secret),
+	);
+
+	return toHex(new Uint8Array(digest));
+};

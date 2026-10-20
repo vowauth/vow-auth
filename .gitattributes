@@ -1,1 +1,9 @@
 * text=auto eol=lf
+*.ts filter=nocomments
+*.tsx filter=nocomments
+*.mts filter=nocomments
+*.cts filter=nocomments
+*.js filter=nocomments
+*.jsx filter=nocomments
+*.mjs filter=nocomments
+*.cjs filter=nocomments

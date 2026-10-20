@@ -3,7 +3,9 @@
 	"compilerOptions": {
 		"jsx": "react-jsx",
 		"paths": {
-			"@vow-auth/core": ["./packages/core/src/index.ts"]
+			"@vow-auth/core": ["./packages/core/src/index.ts"],
+			"@vow-auth/adapter-memory": ["./packages/adapter-memory/src/index.ts"],
+			"@vow-auth/adapter-redis": ["./packages/adapter-redis/src/index.ts"]
 		}
 	},
 	"include": ["vitest.config.ts", "packages/**/*.ts", "packages/**/*.tsx"],

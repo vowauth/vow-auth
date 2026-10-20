@@ -2,7 +2,9 @@
 	"$schema": "https://unpkg.com/knip@6/schema.json",
 	"tags": ["-lintignore"],
 	"workspaces": {
-		".": {},
+		".": {
+			"entry": ["scripts/*.mjs"]
+		},
 		"packages/*": {
 			"entry": ["tests/**/*.test.ts"]
 		}
