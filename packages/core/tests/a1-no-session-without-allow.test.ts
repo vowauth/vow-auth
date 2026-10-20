@@ -40,9 +40,7 @@ test("forged decisions yield no session", async () => {
 test("an issued allow decision cannot be rewritten into another subject", async () => {
 	const decision = await evaluatePolicy("u1", () => "allow");
 
-	expect(() => {
-		(decision as { subject: string }).subject = "admin";
-	}).toThrow(TypeError);
+	expect(Reflect.set(decision, "subject", "admin")).toBe(false);
 
 	const result = issueSession(decision);
 	expect(result.ok && result.value.subject).toBe("u1");

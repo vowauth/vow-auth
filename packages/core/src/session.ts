@@ -1,5 +1,7 @@
 import { isMintedAllow } from "./decision.js";
+import { ERROR_CODES } from "./errors.js";
 import { fail, type Result, succeed } from "./result.js";
+import { createMintRegistry } from "./shared/mint-registry.js";
 import { generateSecret } from "./shared/secret.js";
 
 /**
@@ -8,7 +10,7 @@ import { generateSecret } from "./shared/secret.js";
  */
 export type Session = { readonly id: string; readonly subject: string };
 
-const bornSessions = new WeakSet<Session>();
+const bornSessions = createMintRegistry<Session>();
 
 /**
  * Creates a session. This is the only place a session is born. The input is
@@ -17,18 +19,14 @@ const bornSessions = new WeakSet<Session>();
  */
 export function issueSession(decision: unknown): Result<Session> {
 	if (!isMintedAllow(decision)) {
-		return fail("no-allow");
+		return fail(ERROR_CODES.noAllow);
 	}
 
-	const session: Session = Object.freeze({
-		id: generateSecret(),
-		subject: decision.subject,
-	});
-	bornSessions.add(session);
-
-	return succeed(session);
+	return succeed(
+		bornSessions.mint(
+			Object.freeze({ id: generateSecret(), subject: decision.subject }),
+		),
+	);
 }
 
-export const isBornSession = (value: unknown): value is Session => {
-	return bornSessions.has(value as Session);
-};
+export const isBornSession = bornSessions.has;

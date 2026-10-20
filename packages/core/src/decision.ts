@@ -1,9 +1,13 @@
+import { createMintRegistry } from "./shared/mint-registry.js";
+
 /** Verdict of a policy evaluation. Only `allow` can be turned into a session. */
 export type Decision =
 	| { readonly kind: "allow"; readonly subject: string }
 	| { readonly kind: "deny"; readonly reason: string };
 
-const mintedAllowDecisions = new WeakSet<Decision>();
+type AllowDecision = Extract<Decision, { kind: "allow" }>;
+
+const mintedAllowDecisions = createMintRegistry<AllowDecision>();
 
 /**
  * Evaluates a policy for a subject. The policy may be synchronous or
@@ -27,14 +31,7 @@ export async function evaluatePolicy(
 		return { kind: "deny", reason: "not-allowed" };
 	}
 
-	const decision: Decision = Object.freeze({ kind: "allow", subject });
-	mintedAllowDecisions.add(decision);
-
-	return decision;
+	return mintedAllowDecisions.mint(Object.freeze({ kind: "allow", subject }));
 }
 
-export const isMintedAllow = (
-	value: unknown,
-): value is Decision & { kind: "allow" } => {
-	return mintedAllowDecisions.has(value as Decision);
-};
+export const isMintedAllow = mintedAllowDecisions.has;

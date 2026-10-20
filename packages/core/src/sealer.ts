@@ -1,3 +1,4 @@
+import { ERROR_CODES } from "./errors.js";
 import { fail, type Result, succeed } from "./result.js";
 import { own } from "./shared/own.js";
 
@@ -47,7 +48,38 @@ const MINIMUM_SECRET_LENGTH = 32;
 const SALT_BYTES = 16;
 const INITIALIZATION_VECTOR_BYTES = 12;
 const KEY_DERIVATION_LABEL = "vow-auth/seal/v1/";
-const SEALED_PATTERN = /^(0|[1-9][0-9]{0,8})\.([A-Za-z0-9_-]+)$/;
+const DIGITS = new Set("0123456789");
+const BASE64_URL_CHARACTERS = new Set(
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
+);
+const MAXIMUM_VERSION_DIGITS = 9;
+
+const consistsOf = (text: string, alphabet: Set<string>): boolean => {
+	return (
+		text.length > 0 &&
+		Array.from(text).every((character) => alphabet.has(character))
+	);
+};
+
+const parseSealed = (
+	sealed: string,
+): { readonly version: number; readonly body: string } | undefined => {
+	const separator = sealed.indexOf(".");
+	const version = sealed.slice(0, separator);
+	const body = sealed.slice(separator + 1);
+
+	if (
+		separator < 0 ||
+		version.length > MAXIMUM_VERSION_DIGITS ||
+		(version.length > 1 && version.startsWith("0")) ||
+		!consistsOf(version, DIGITS) ||
+		!consistsOf(body, BASE64_URL_CHARACTERS)
+	) {
+		return undefined;
+	}
+
+	return { version: Number(version), body };
+};
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -173,16 +205,16 @@ export function createSealer(options: SealerOptions): Sealer {
 			)}`;
 		},
 		async unseal(sealed, purpose) {
-			const [, version, body] = SEALED_PATTERN.exec(sealed) ?? [];
+			const parsed = parseSealed(sealed);
 			const secretKey =
-				version === undefined ? undefined : secretKeys.get(Number(version));
+				parsed === undefined ? undefined : secretKeys.get(parsed.version);
 
-			if (body === undefined || secretKey === undefined) {
-				return fail("invalid-seal");
+			if (parsed === undefined || secretKey === undefined) {
+				return fail(ERROR_CODES.invalidSeal);
 			}
 
 			try {
-				const bytes = fromBase64Url(body);
+				const bytes = fromBase64Url(parsed.body);
 				const plaintext = await crypto.subtle.decrypt(
 					{
 						name: "AES-GCM",
@@ -201,12 +233,12 @@ export function createSealer(options: SealerOptions): Sealer {
 				const contents: SealedContents = JSON.parse(decoder.decode(plaintext));
 
 				if (!(Date.now() < contents.expiresAtMilliseconds)) {
-					return fail("invalid-seal");
+					return fail(ERROR_CODES.invalidSeal);
 				}
 
 				return succeed(contents.payload);
 			} catch {
-				return fail("invalid-seal");
+				return fail(ERROR_CODES.invalidSeal);
 			}
 		},
 	};

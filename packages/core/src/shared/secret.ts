@@ -1,6 +1,4 @@
-const SECRET_BYTES = 32;
-
-export const SECRET_LENGTH = SECRET_BYTES * 2;
+import { SECRET_BYTES } from "./constants.js";
 
 const HEX_BYTE_TABLE: readonly string[] = Array.from(
 	{ length: 256 },

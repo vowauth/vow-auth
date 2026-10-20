@@ -1,4 +1,18 @@
 export { type Decision, evaluatePolicy } from "./decision.js";
+export { ERROR_CODES } from "./errors.js";
+export type { IdentityStore } from "./identity/identity-store.js";
+export {
+	type Resolution,
+	resolveIdentity,
+} from "./identity/resolve-identity.js";
+export {
+	type Factor,
+	type IdentityClaims,
+	type Proof,
+	type ProofStrength,
+	type VerifyProofOptions,
+	verifyProof,
+} from "./proof.js";
 export { fail, type Result, succeed } from "./result.js";
 export {
 	createSealer,

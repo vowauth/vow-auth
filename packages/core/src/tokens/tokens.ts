@@ -1,6 +1,8 @@
+import { ERROR_CODES } from "../errors.js";
 import { fail, type Result, succeed } from "../result.js";
+import { SECRET_LENGTH } from "../shared/constants.js";
 import { own } from "../shared/own.js";
-import { generateSecret, hashSecret, SECRET_LENGTH } from "../shared/secret.js";
+import { generateSecret, hashSecret } from "../shared/secret.js";
 import type { TokenStore } from "./token-store.js";
 
 /** Options for creating the tokens primitive. */
@@ -54,7 +56,7 @@ export function createTokens(options: TokensOptions): Tokens {
 		},
 		async consume(token, purpose) {
 			if (token.length !== SECRET_LENGTH) {
-				return fail("invalid-token");
+				return fail(ERROR_CODES.invalidToken);
 			}
 
 			const record = await options.store.take(await hashSecret(token));
@@ -64,7 +66,7 @@ export function createTokens(options: TokensOptions): Tokens {
 				record.purpose !== purpose ||
 				!(Date.now() < record.expiresAtMilliseconds)
 			) {
-				return fail("invalid-token");
+				return fail(ERROR_CODES.invalidToken);
 			}
 
 			return succeed(record.payload);

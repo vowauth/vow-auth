@@ -263,9 +263,7 @@ test("only a session born from an allow decision gets a token", async () => {
 	const { sessionTokens } = createFixture();
 	const session = await bornSession("alice");
 
-	expect(() => {
-		(session as { subject: string }).subject = "admin";
-	}).toThrow(TypeError);
+	expect(Reflect.set(session, "subject", "admin")).toBe(false);
 
 	for (const forged of [
 		{ id: session.id, subject: "admin" },

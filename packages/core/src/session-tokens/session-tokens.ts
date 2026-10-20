@@ -1,3 +1,4 @@
+import { ERROR_CODES } from "../errors.js";
 import { fail, type Result, succeed } from "../result.js";
 import type { Sealer } from "../sealer.js";
 import { isBornSession, type Session } from "../session.js";
@@ -142,7 +143,7 @@ export function createSessionTokens(
 	return {
 		async issue(session, input) {
 			if (!isBornSession(session)) {
-				return fail("no-session");
+				return fail(ERROR_CODES.noSession);
 			}
 
 			if (
@@ -193,7 +194,7 @@ export function createSessionTokens(
 				: undefined;
 
 			if (chain === undefined) {
-				return fail("invalid-session");
+				return fail(ERROR_CODES.invalidSession);
 			}
 
 			const tenant = tenantOf(chain);
@@ -216,7 +217,7 @@ export function createSessionTokens(
 						stamp >= (reading.stamps[index] ?? Number.NaN),
 				)
 			) {
-				return fail("invalid-session");
+				return fail(ERROR_CODES.invalidSession);
 			}
 
 			return succeed({
