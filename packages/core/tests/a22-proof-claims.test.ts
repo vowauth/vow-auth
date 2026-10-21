@@ -28,12 +28,57 @@ test("a proof carries the factor identity and validated claims", async () => {
 		{ now: () => 42 },
 	);
 
-	expect(result.ok && result.value).toEqual({
+	expect(result.ok && result.value).toMatchObject({
 		factor: "test-factor",
 		strength: "possession",
 		verifiedAtMilliseconds: 42,
-		claims: validClaims,
+		claims: {
+			provider: "email",
+			externalId: "a@example.com",
+			emailVerified: true,
+		},
 	});
+	expect(result.ok && result.value.claims.email?.address).toBe("a@example.com");
+});
+
+test("the email is canonicalized at the gate and names the identity of provider email", async () => {
+	const result = await verifyProof(
+		factorReturning(() =>
+			succeed({
+				...validClaims,
+				externalId: "  ALICE@Example.COM ",
+				email: "  ALICE@Example.COM ",
+			}),
+		),
+		undefined,
+	);
+
+	expect(result.ok && result.value.claims.email?.address).toBe(
+		"alice@example.com",
+	);
+	expect(result.ok && result.value.claims.externalId).toBe("alice@example.com");
+});
+
+test("another provider keeps its own external id", async () => {
+	const result = await verifyProof(
+		factorReturning(() =>
+			succeed({ ...validClaims, provider: "google", externalId: "g-1" }),
+		),
+		undefined,
+	);
+
+	expect(result.ok && result.value.claims.externalId).toBe("g-1");
+});
+
+test("the provider email without an address is refused", async () => {
+	const result = await verifyProof(
+		factorReturning(() =>
+			succeed({ provider: "email", externalId: "a", emailVerified: false }),
+		),
+		undefined,
+	);
+
+	expect(result.ok).toBe(false);
 });
 
 test("a proof is frozen", async () => {

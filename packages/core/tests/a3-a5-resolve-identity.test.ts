@@ -1,5 +1,6 @@
 import { createMemoryIdentityStore } from "@vow-auth/adapter-memory";
 import {
+	canonicalizeEmail,
 	type Factor,
 	resolveIdentity,
 	succeed,
@@ -172,9 +173,7 @@ test("A4: letters of any script are allowed in the local part", async () => {
 	}
 });
 
-test("A4: malformed emails are refused", async () => {
-	const store = createMemoryIdentityStore();
-
+test("A4: malformed emails are refused at the gate, before any identity work", async () => {
 	for (const email of [
 		"no-at-sign",
 		"two@@example.com",
@@ -198,13 +197,19 @@ test("A4: malformed emails are refused", async () => {
 		"a@example.com#x",
 		"a@example.com\\x",
 	]) {
-		const result = await resolveIdentity(
-			store,
-			"t1",
-			await emailProof(email, true),
-		);
+		const factor: Factor = {
+			id: "test-factor",
+			strength: "possession",
+			verify: async () =>
+				succeed({
+					provider: "email",
+					externalId: email,
+					email,
+					emailVerified: true,
+				}),
+		};
 
-		expect(result.ok, email).toBe(false);
+		expect((await verifyProof(factor, undefined)).ok, email).toBe(false);
 	}
 });
 
@@ -302,4 +307,21 @@ test("concurrent first sign-ins of one identity create one subject", async () =>
 	);
 
 	expect(subjects.size).toBe(1);
+});
+
+test("A4: the store takes only a canonical address, which the compiler enforces", async () => {
+	const store = createMemoryIdentityStore();
+
+	// @ts-expect-error a raw string is not a canonical email
+	await store.findSubjectByVerifiedEmail("t1", "a@example.com");
+	// @ts-expect-error an object that only looks like one is not a canonical email
+	await store.findSubjectByVerifiedEmail("t1", { address: "a@example.com" });
+
+	const canonical = canonicalizeEmail(" A@Example.com ");
+
+	expect(canonical?.address).toBe("a@example.com");
+	expect(canonical && Object.isFrozen(canonical)).toBe(true);
+	expect(
+		canonical && (await store.findSubjectByVerifiedEmail("t1", canonical)),
+	).toBeUndefined();
 });

@@ -258,7 +258,7 @@ export async function createPlayground(): Promise<Playground> {
 		};
 
 		if (proof.value.claims.email !== undefined) {
-			known.emails.add(proof.value.claims.email);
+			known.emails.add(proof.value.claims.email.address);
 		}
 
 		subjects.set(subjectId, known);

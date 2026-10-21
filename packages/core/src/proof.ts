@@ -6,24 +6,32 @@ import {
 	report,
 } from "./audit.js";
 import { ERROR_CODES } from "./errors.js";
+import {
+	type CanonicalEmail,
+	canonicalizeEmail,
+} from "./identity/canonical-email.js";
 import { fail, type Result, succeed } from "./result.js";
 import { isRow } from "./shared/is-row.js";
 import { createMintRegistry } from "./shared/mint-registry.js";
 import { own } from "./shared/own.js";
+
+/** The provider name of identities that are identified by their email address alone. */
+export const EMAIL_PROVIDER = "email";
 
 /** How a factor proves a claim. */
 export type ProofStrength = "knowledge" | "possession" | "inherence";
 
 /**
  * What a factor asserts about the identity it verified. A verified email is
- * always present: the claim cannot be verified without an address.
+ * always present: the claim cannot be verified without an address. The email
+ * is canonical, and for the provider `email` it is also the external id.
  */
 export type IdentityClaims = {
 	readonly provider: string;
 	readonly externalId: string;
 } & (
-	| { readonly email: string; readonly emailVerified: true }
-	| { readonly email?: string; readonly emailVerified: false }
+	| { readonly email: CanonicalEmail; readonly emailVerified: true }
+	| { readonly email?: CanonicalEmail; readonly emailVerified: false }
 );
 
 /**
@@ -67,43 +75,54 @@ const isNonEmptyString = (value: unknown): value is string => {
 	return typeof value === "string" && value.length > 0;
 };
 
-const parseClaims = (raw: unknown): IdentityClaims | undefined => {
+const parseClaims = (raw: unknown): Result<IdentityClaims, string> => {
 	if (!isRow(raw)) {
-		return undefined;
+		return fail(AUDIT_REASONS.invalidClaims);
 	}
 
 	for (const key of Object.keys(raw)) {
 		if (!CLAIM_KEYS.includes(key)) {
-			return undefined;
+			return fail(AUDIT_REASONS.invalidClaims);
 		}
 	}
 
 	const provider = own(raw, "provider");
-	const externalId = own(raw, "externalId");
-	const email = own(raw, "email");
+	const claimedExternalId = own(raw, "externalId");
+	const claimedEmail = own(raw, "email");
 	const emailVerified = own(raw, "emailVerified");
 
 	if (
 		!isNonEmptyString(provider) ||
-		!isNonEmptyString(externalId) ||
-		typeof emailVerified !== "boolean"
+		!isNonEmptyString(claimedExternalId) ||
+		typeof emailVerified !== "boolean" ||
+		(claimedEmail !== undefined && !isNonEmptyString(claimedEmail)) ||
+		(provider === EMAIL_PROVIDER && claimedEmail === undefined)
 	) {
-		return undefined;
+		return fail(AUDIT_REASONS.invalidClaims);
 	}
 
-	if (emailVerified) {
-		return isNonEmptyString(email)
-			? Object.freeze({ provider, externalId, email, emailVerified })
-			: undefined;
+	if (claimedEmail === undefined) {
+		return emailVerified
+			? fail(AUDIT_REASONS.invalidClaims)
+			: succeed(
+					Object.freeze({
+						provider,
+						externalId: claimedExternalId,
+						emailVerified,
+					}),
+				);
 	}
+
+	const email = canonicalizeEmail(claimedEmail);
 
 	if (email === undefined) {
-		return Object.freeze({ provider, externalId, emailVerified });
+		return fail(AUDIT_REASONS.invalidEmail);
 	}
 
-	return isNonEmptyString(email)
-		? Object.freeze({ provider, externalId, email, emailVerified })
-		: undefined;
+	const externalId =
+		provider === EMAIL_PROVIDER ? email.address : claimedExternalId;
+
+	return succeed(Object.freeze({ provider, externalId, email, emailVerified }));
 };
 
 /**
@@ -144,11 +163,13 @@ export async function verifyProof(
 		return refuse(AUDIT_REASONS.factorRejected);
 	}
 
-	const claims = parseClaims(outcome.value);
+	const parsed = parseClaims(outcome.value);
 
-	if (claims === undefined) {
-		return refuse(AUDIT_REASONS.invalidClaims);
+	if (!parsed.ok) {
+		return refuse(parsed.error);
 	}
+
+	const claims = parsed.value;
 
 	await report(audit, {
 		event: AUDIT_EVENTS.proofVerify,

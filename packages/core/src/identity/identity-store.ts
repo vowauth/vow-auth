@@ -1,4 +1,5 @@
 import type { IdentityClaims } from "../proof.js";
+import type { CanonicalEmail } from "./canonical-email.js";
 
 /**
  * Storage port for identities. Every method takes the tenant, so a lookup
@@ -14,7 +15,7 @@ export type IdentityStore = {
 	): Promise<string | undefined>;
 	findSubjectByVerifiedEmail(
 		tenantId: string,
-		email: string,
+		email: CanonicalEmail,
 	): Promise<string | undefined>;
 	createSubject(
 		tenantId: string,

@@ -6,10 +6,9 @@ import {
 	report,
 } from "../audit.js";
 import { ERROR_CODES } from "../errors.js";
-import { type IdentityClaims, isMintedProof } from "../proof.js";
+import { isMintedProof } from "../proof.js";
 import { fail, type Result, succeed } from "../result.js";
 import { own } from "../shared/own.js";
-import { canonicalizeEmail } from "./canonical-email.js";
 import type { IdentityStore } from "./identity-store.js";
 
 /** How an identity resolved. */
@@ -33,17 +32,15 @@ export type ResolveIdentityOptions = {
 	readonly audit?: AuditSink;
 };
 
-const EMAIL_PROVIDER = "email";
-
 /**
  * Maps a proof to a subject inside one tenant. This is the only place
  * identities are linked. An identity is linked to an existing subject only
  * when the proof carries a verified email that already belongs, verified, to
  * that subject; an unverified claim never links and never takes over an
- * account. Provider `email` is identified by its canonical email address. A
- * link is recorded in the audit before it is made, so a failing sink prevents
- * it; a new subject is recorded right after it is created, and a failing sink
- * then leaves a subject that nothing uses.
+ * account. The email in a proof is already canonical, `verifyProof` made it
+ * so. A link is recorded in the audit before it is made, so a failing sink
+ * prevents it; a new subject is recorded right after it is created, and a
+ * failing sink then leaves a subject that nothing uses.
  */
 export async function resolveIdentity(
 	store: IdentityStore,
@@ -74,41 +71,7 @@ export async function resolveIdentity(
 		return fail(ERROR_CODES.noProof);
 	}
 
-	let email: string | undefined;
-
-	if (proof.claims.email !== undefined) {
-		email = canonicalizeEmail(proof.claims.email);
-
-		if (email === undefined) {
-			await record(
-				AUDIT_OUTCOMES.refusal,
-				AUDIT_REASONS.invalidEmail,
-				"",
-				proof.claims.provider,
-			);
-
-			return fail(ERROR_CODES.invalidEmail);
-		}
-	}
-
-	const externalId =
-		proof.claims.provider === EMAIL_PROVIDER && email !== undefined
-			? email
-			: proof.claims.externalId;
-	const identity: IdentityClaims =
-		email === undefined
-			? {
-					provider: proof.claims.provider,
-					externalId,
-					emailVerified: false,
-				}
-			: {
-					provider: proof.claims.provider,
-					externalId,
-					email,
-					emailVerified: proof.claims.emailVerified,
-				};
-
+	const identity = proof.claims;
 	const existing = await store.findSubject(
 		tenantId,
 		identity.provider,

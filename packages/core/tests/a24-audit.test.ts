@@ -145,12 +145,16 @@ test("proofs are recorded with the reason a refusal has, without the email", asy
 		},
 	});
 	await run(factorReturning(() => succeed({ provider: "p" })));
+	await run(
+		factorReturning(() => succeed({ ...validClaims, email: "not-an-email" })),
+	);
 
 	expect(summary(records)).toEqual([
 		"proof.verify:success:verified",
 		"proof.verify:refusal:factor-rejected",
 		"proof.verify:refusal:factor-error",
 		"proof.verify:refusal:invalid-claims",
+		"proof.verify:refusal:invalid-email",
 	]);
 	expect(records[0]?.detail).toEqual({
 		factor: "test-factor",
@@ -169,19 +173,16 @@ test("identity resolution is recorded for every outcome and refusal", async () =
 		provider: "github",
 		externalId: "gh-1",
 	});
-	const badEmail = await proofOf({ ...validClaims, email: "not-an-email" });
 
 	await resolveIdentity(store, "acme", first, { audit: sink });
 	await resolveIdentity(store, "acme", first, { audit: sink });
 	await resolveIdentity(store, "acme", other, { audit: sink });
-	await resolveIdentity(store, "acme", badEmail, { audit: sink });
 	await resolveIdentity(store, "acme", { forged: true }, { audit: sink });
 
 	expect(summary(records)).toEqual([
 		"identity.resolve:success:created",
 		"identity.resolve:success:existing",
 		"identity.resolve:success:linked",
-		"identity.resolve:refusal:invalid-email",
 		"identity.resolve:refusal:no-proof",
 	]);
 	expect(records[0]?.subject).not.toBe("");

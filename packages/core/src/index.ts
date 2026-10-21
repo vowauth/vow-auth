@@ -15,7 +15,10 @@ export {
 	evaluatePolicy,
 } from "./decision.js";
 export { ERROR_CODES } from "./errors.js";
-export { canonicalizeEmail } from "./identity/canonical-email.js";
+export {
+	type CanonicalEmail,
+	canonicalizeEmail,
+} from "./identity/canonical-email.js";
 export type { IdentityStore } from "./identity/identity-store.js";
 export {
 	RESOLUTION_OUTCOMES,
@@ -39,6 +42,7 @@ export {
 	type OutboxWorkerOptions,
 } from "./outbox/outbox-worker.js";
 export {
+	EMAIL_PROVIDER,
 	type Factor,
 	type IdentityClaims,
 	type Proof,

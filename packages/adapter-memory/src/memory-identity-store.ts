@@ -1,4 +1,8 @@
-import type { IdentityClaims, IdentityStore } from "@vow-auth/core";
+import type {
+	CanonicalEmail,
+	IdentityClaims,
+	IdentityStore,
+} from "@vow-auth/core";
 
 const identityKey = (
 	tenantId: string,
@@ -6,8 +10,8 @@ const identityKey = (
 	externalId: string,
 ): string => JSON.stringify([tenantId, provider, externalId]);
 
-const emailKey = (tenantId: string, email: string): string =>
-	JSON.stringify([tenantId, email]);
+const emailKey = (tenantId: string, email: CanonicalEmail): string =>
+	JSON.stringify([tenantId, email.address]);
 
 /** In-process identity store for tests and single-instance development. */
 export function createMemoryIdentityStore(): IdentityStore {

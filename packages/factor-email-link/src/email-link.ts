@@ -1,5 +1,6 @@
 import {
 	canonicalizeEmail,
+	EMAIL_PROVIDER,
 	ERROR_CODES,
 	type Factor,
 	fail,
@@ -9,7 +10,6 @@ import {
 } from "@vow-auth/core";
 
 const EMAIL_LINK_PURPOSE = "email-link";
-const EMAIL_PROVIDER = "email";
 
 /** What the application sends: the address and the secret to put into the link. */
 export type EmailLinkMessage = {
@@ -90,11 +90,11 @@ export function createEmailLink(options: EmailLinkOptions): EmailLink {
 
 			const token = await options.tokens.issue({
 				purpose: EMAIL_LINK_PURPOSE,
-				payload: { email: canonical },
+				payload: { email: canonical.address },
 				timeToLiveMilliseconds: options.timeToLiveMilliseconds,
 			});
 
-			await options.deliver({ email: canonical, token });
+			await options.deliver({ email: canonical.address, token });
 
 			return succeed(undefined);
 		},
