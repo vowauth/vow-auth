@@ -525,6 +525,7 @@ test("the core reports exactly the documented events", () => {
 		"authorize.check",
 		"identity.mutate",
 		"identity.resolve",
+		"meter.consume",
 		"policy.evaluate",
 		"proof.verify",
 		"seal.unseal",

@@ -11,6 +11,7 @@ export const ERROR_CODES = {
 	invalidToken: "invalid-token",
 	noAllow: "no-allow",
 	noProof: "no-proof",
+	rateLimited: "rate-limited",
 	noSubject: "no-subject",
 	noSession: "no-session",
 } as const;

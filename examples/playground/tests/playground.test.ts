@@ -239,6 +239,38 @@ test("confirming an email evicts the earlier claim and its session, and a delete
 	expect(facts).toContain("identity.mutate:deleted");
 });
 
+test("sending links to one address is limited, however it is spelled", async () => {
+	const playground = await createPlayground();
+	const statuses = [];
+
+	for (const email of [
+		"alice@example.com",
+		"ALICE@Example.com",
+		" alice@example.com ",
+		"alice@example.com",
+	]) {
+		statuses.push(
+			(await call(playground, "/api/challenge", { tenant: "acme", email }))
+				.status,
+		);
+	}
+
+	const other = await call(playground, "/api/challenge", {
+		tenant: "acme",
+		email: "bob@example.com",
+	});
+
+	expect(statuses).toEqual([200, 200, 200, 429]);
+	expect(other.status).toBe(200);
+
+	const facts = (await stateOf(playground)).audit.map(
+		(entry: { event: string; reason: string }) =>
+			`${entry.event}:${entry.reason}`,
+	);
+
+	expect(facts).toContain("meter.consume:limit-exceeded");
+});
+
 test("revoking one device leaves the other signed in", async () => {
 	const playground = await createPlayground();
 	const claims = JSON.stringify({

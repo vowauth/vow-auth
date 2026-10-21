@@ -4,6 +4,8 @@ import {
 	createMutateIdentity,
 	type MutateIdentity,
 } from "./identity/mutate-identity.js";
+import { createMeter, type Meter } from "./meter/meter.js";
+import type { MeterStore } from "./meter/meter-store.js";
 import { createSealer, type Sealer, type SecretVersion } from "./sealer.js";
 import type { EpochStore } from "./session-tokens/epoch-store.js";
 import {
@@ -23,6 +25,7 @@ export type AuthOptions = {
 	readonly identities: IdentityStore;
 	readonly epochs: EpochStore;
 	readonly tokenStore: TokenStore;
+	readonly meterStore: MeterStore;
 	/** Server secrets for sealed values and session tokens, newest first. */
 	readonly secrets: readonly SecretVersion[];
 	/** The longest life time of any session token. */
@@ -48,6 +51,8 @@ export type Auth = {
 	readonly tokens: Tokens;
 	/** Seals short-lived values such as an OAuth state. */
 	readonly sealer: Sealer;
+	/** Counts requests against limits shared by every instance. */
+	readonly meter: Meter;
 	/** Deletes subjects and confirms emails, with every consequence. */
 	readonly mutateIdentity: MutateIdentity;
 };
@@ -68,6 +73,7 @@ export function createAuth(options: AuthOptions): Auth {
 
 	const sealer = createSealer({ secrets: options.secrets, audit });
 	const tokens = createTokens({ store: options.tokenStore, audit });
+	const meter = createMeter({ store: options.meterStore, audit });
 	const sessionTokens = createSessionTokens({
 		sealer,
 		epochs: options.epochs,
@@ -95,6 +101,7 @@ export function createAuth(options: AuthOptions): Auth {
 			revoke: sessionTokens.revoke,
 		},
 		tokens,
+		meter,
 		sealer,
 		mutateIdentity,
 	};

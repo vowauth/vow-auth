@@ -31,6 +31,18 @@ export {
 	type Resolution,
 	type ResolutionOutcome,
 } from "./identity/resolve-identity.js";
+export type {
+	Meter,
+	MeterRefusal,
+	MeterRule,
+	MeterScope,
+} from "./meter/meter.js";
+export type {
+	MeterConsumeInput,
+	MeterReading,
+	MeterStore,
+	MeterStoreResult,
+} from "./meter/meter-store.js";
 export { createEmit, type Emit } from "./outbox/emit.js";
 export type {
 	ClaimInput,

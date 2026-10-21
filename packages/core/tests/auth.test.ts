@@ -1,6 +1,7 @@
 import {
 	createMemoryEpochStore,
 	createMemoryIdentityStore,
+	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
 import {
@@ -19,6 +20,7 @@ const optionsWith = (audit: AuditSink): AuthOptions => ({
 	identities: createMemoryIdentityStore(),
 	epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
 	tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
+	meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
 	secrets: [{ version: 1, value: "auth-secret-0123456789abcdefghijklmnop" }],
 	maximumLifeTimeMilliseconds: LIFE_TIME,
 	sessionTimeToLiveMilliseconds: LIFE_TIME,
@@ -79,6 +81,14 @@ test("one sink reaches every part of the core", async () => {
 		throw new Error("the sign in must pass");
 	}
 
+	await auth.meter.consume(
+		{ tenant: "acme", actor: "alice", resource: "email-link" },
+		{ limit: 1, windowMilliseconds: 1_000 },
+	);
+	await auth.meter.consume(
+		{ tenant: "acme", actor: "alice", resource: "email-link" },
+		{ limit: 1, windowMilliseconds: 1_000 },
+	);
 	await auth.sessions.verify("1.garbage");
 	await auth.sessions.revoke({ tenant: "acme", scope: "tenant" });
 	await auth.mutateIdentity("acme", signedIn.value.subject, { type: "delete" });
@@ -86,6 +96,7 @@ test("one sink reaches every part of the core", async () => {
 	expect([...new Set(records.map((record) => record.event))].sort()).toEqual([
 		"identity.mutate",
 		"identity.resolve",
+		"meter.consume",
 		"policy.evaluate",
 		"proof.verify",
 		"seal.unseal",

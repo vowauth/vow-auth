@@ -8,6 +8,7 @@ export {
 	resolveIdentity,
 } from "./identity/resolve-identity.js";
 export * from "./index.js";
+export { createMeter, type MeterOptions } from "./meter/meter.js";
 export { type VerifyProofOptions, verifyProof } from "./proof.js";
 export { createSealer, type SealerOptions } from "./sealer.js";
 export { issueSession } from "./session.js";

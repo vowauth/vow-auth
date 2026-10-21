@@ -1,6 +1,7 @@
 import {
 	createMemoryEpochStore,
 	createMemoryIdentityStore,
+	createMemoryMeterStore,
 	createMemoryOutboxStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
@@ -32,6 +33,7 @@ const optionsOf = (): AuthOptions => ({
 	identities: createMemoryIdentityStore(),
 	epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
 	tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
+	meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
 	secrets: [{ version: 1, value: "surface-secret-0123456789abcdefghijklm" }],
 	maximumLifeTimeMilliseconds: LIFE_TIME,
 	sessionTimeToLiveMilliseconds: LIFE_TIME,
@@ -62,6 +64,7 @@ test("A21, A25: the public surface is exactly this, so a new export or a weakeni
 		identities: true,
 		epochs: true,
 		tokenStore: true,
+		meterStore: true,
 		secrets: true,
 		maximumLifeTimeMilliseconds: true,
 		sessionTimeToLiveMilliseconds: true,
@@ -69,7 +72,7 @@ test("A21, A25: the public surface is exactly this, so a new export or a weakeni
 		audit: true,
 	} satisfies Record<keyof AuthOptions, true>;
 
-	expect(Object.keys(optionKeys)).toHaveLength(8);
+	expect(Object.keys(optionKeys)).toHaveLength(9);
 });
 
 test("A25: an unknown option is a compile error, not silence", () => {

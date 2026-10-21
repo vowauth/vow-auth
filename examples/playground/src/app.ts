@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import {
 	createMemoryEpochStore,
 	createMemoryIdentityStore,
+	createMemoryMeterStore,
 	createMemoryOutboxStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
@@ -9,6 +10,7 @@ import {
 	AUDIT_OUTCOMES,
 	type AuditOutcome,
 	type AuditSink,
+	canonicalizeEmail,
 	createAuth,
 	createEmit,
 	createOutboxWorker,
@@ -25,6 +27,8 @@ const MEMORY_BUDGET_BYTES = 10_000_000;
 const LINK_TIME_TO_LIVE_MILLISECONDS = 10 * 60 * 1_000;
 const SESSION_TIME_TO_LIVE_MILLISECONDS = 60 * 60 * 1_000;
 const AUDIT_LIMIT = 300;
+const LINK_REQUESTS_PER_WINDOW = 3;
+const LINK_REQUEST_WINDOW_MILLISECONDS = 60 * 1_000;
 const SECRET_BYTES = 32;
 
 type AuditEntry = {
@@ -161,6 +165,7 @@ export async function createPlayground(): Promise<Playground> {
 		identities,
 		epochs: createMemoryEpochStore({ maximumBytes: MEMORY_BUDGET_BYTES }),
 		tokenStore: createMemoryTokenStore({ maximumBytes: MEMORY_BUDGET_BYTES }),
+		meterStore: createMemoryMeterStore({ maximumBytes: MEMORY_BUDGET_BYTES }),
 		secrets: [{ version: 1, value: randomSecret() }],
 		maximumLifeTimeMilliseconds: SESSION_TIME_TO_LIVE_MILLISECONDS,
 		sessionTimeToLiveMilliseconds: SESSION_TIME_TO_LIVE_MILLISECONDS,
@@ -343,6 +348,31 @@ export async function createPlayground(): Promise<Playground> {
 			case "/api/challenge": {
 				const tenant = text(body, "tenant");
 				const email = text(body, "email");
+				const address = canonicalizeEmail(email);
+				const allowance =
+					address === undefined
+						? undefined
+						: await auth.meter.consume(
+								{
+									tenant,
+									actor: address.address,
+									resource: "email-link.challenge",
+								},
+								{
+									limit: LINK_REQUESTS_PER_WINDOW,
+									windowMilliseconds: LINK_REQUEST_WINDOW_MILLISECONDS,
+								},
+							);
+
+				if (allowance !== undefined && !allowance.ok) {
+					return respond(429, {
+						error: allowance.error.code,
+						retryAfterSeconds: Math.ceil(
+							(allowance.error.resetsAtMilliseconds - Date.now()) / 1_000,
+						),
+					});
+				}
+
 				const result = await emailLink.challenge(email);
 
 				await record(
