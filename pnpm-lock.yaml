@@ -212,6 +212,16 @@ importers:
         specifier: workspace:*
         version: link:../core
 
+  packages/authorize:
+    dependencies:
+      '@vetojs/core':
+        specifier: ^1.2.0
+        version: 1.2.0
+    devDependencies:
+      '@vow-auth/core':
+        specifier: workspace:*
+        version: link:../core
+
   packages/core: {}
 
   packages/factor-email-link:
@@ -652,6 +662,10 @@ packages:
 
   '@types/node@26.6.4':
     resolution: {integrity: sha512-ldVPDCzj7fsaGZrLB0NuHuTvJcsNasysBAqMolr/cgxrLd1xbqxIr3XJiPnHHJUCxj5sNF1vnRj9aWnrVh5Jcg==}
+
+  '@vetojs/core@1.2.0':
+    resolution: {integrity: sha512-Q3OQmSKQBx20rP4Z6pTTUDNeb3j8DhF8734yN6tA4ONH1Ej6AOomSGlFtHeAS/NNfGGKkbgx/DXUtoQwdZNE3w==}
+    engines: {node: '>=22'}
 
   '@vitest/mocker@5.0.3':
     resolution: {integrity: sha512-T8sWAIbkSyAjkwTcaEc3Iu0o9A27X1/kdXrizhZkGuSKScRQtRzclfAMpOTcGdXCsqxeWlpGy3XjqaW8CpLORg==}
@@ -1247,6 +1261,8 @@ snapshots:
   '@types/node@26.6.4':
     dependencies:
       undici-types: 8.9.0
+
+  '@vetojs/core@1.2.0': {}
 
   '@vitest/mocker@5.0.3(vite@8.3.3(@types/node@26.6.4)(jiti@2.7.0)(yaml@2.9.1))':
     dependencies:

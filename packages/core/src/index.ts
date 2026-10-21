@@ -2,9 +2,11 @@ export {
 	AUDIT_EVENTS,
 	AUDIT_OUTCOMES,
 	AUDIT_REASONS,
+	type AuditEntry,
 	type AuditOutcome,
 	type AuditRecord,
 	type AuditSink,
+	report,
 } from "./audit.js";
 export {
 	DECISION_KINDS,

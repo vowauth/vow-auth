@@ -1,5 +1,6 @@
 /** Names of the events the core reports. Applications may report their own events through the same sink. */
 export const AUDIT_EVENTS = {
+	authorizeCheck: "authorize.check",
 	identityResolve: "identity.resolve",
 	policyEvaluate: "policy.evaluate",
 	proofVerify: "proof.verify",
@@ -25,10 +26,13 @@ export type AuditOutcome = (typeof AUDIT_OUTCOMES)[keyof typeof AUDIT_OUTCOMES];
  * can be investigated without telling an attacker anything.
  */
 export const AUDIT_REASONS = {
+	allowed: "allowed",
+	authorizeError: "authorize-error",
 	consumed: "consumed",
 	expired: "expired",
 	factorError: "factor-error",
 	factorRejected: "factor-rejected",
+	forbidden: "forbidden",
 	invalidClaims: "invalid-claims",
 	invalidEmail: "invalid-email",
 	invalidSeal: "invalid-seal",
