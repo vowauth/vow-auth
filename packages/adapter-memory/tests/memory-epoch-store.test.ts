@@ -4,10 +4,10 @@ import {
 	createSessionTokens,
 	type EpochStore,
 	evaluatePolicy,
-	issueSession,
 	type RevocationLevel,
 	type SessionTokens,
 } from "@vow-auth/core";
+import { issueSession } from "@vow-auth/core/testing";
 import fastCheck from "fast-check";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 

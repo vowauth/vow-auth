@@ -23,7 +23,7 @@ export type SessionTokensOptions = {
 	 * revocation without any margin.
 	 */
 	readonly maximumLifeTimeMilliseconds: number;
-	readonly audit?: AuditSink;
+	readonly audit?: AuditSink | undefined;
 };
 
 /** Where a session token is used and how long it lives. */

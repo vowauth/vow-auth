@@ -67,7 +67,7 @@ export {
 	type SealInput,
 	type SecretVersion,
 } from "./sealer.js";
-export { issueSession, type Session } from "./session.js";
+export type { Session } from "./session.js";
 export type {
 	EpochReading,
 	EpochStore,
@@ -80,6 +80,14 @@ export {
 	type SessionTokensOptions,
 	type VerifiedSession,
 } from "./session-tokens/session-tokens.js";
+export {
+	createSignIn,
+	type SignedIn,
+	type SignIn,
+	type SignInOptions,
+	type SignInPolicyInput,
+	type SignInRequest,
+} from "./sign-in.js";
 export type { TokenRecord, TokenStore } from "./tokens/token-store.js";
 export {
 	createTokens,

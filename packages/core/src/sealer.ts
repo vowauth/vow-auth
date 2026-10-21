@@ -24,7 +24,7 @@ export type SealerOptions = {
 	 * characters long, for example `openssl rand -base64 32`.
 	 */
 	readonly secrets: readonly SecretVersion[];
-	readonly audit?: AuditSink;
+	readonly audit?: AuditSink | undefined;
 };
 
 /** Parameters of a value to seal. */

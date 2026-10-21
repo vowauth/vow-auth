@@ -3,6 +3,7 @@
 	"compilerOptions": {
 		"jsx": "react-jsx",
 		"paths": {
+			"@vow-auth/core/testing": ["./packages/core/src/testing.ts"],
 			"@vow-auth/core": ["./packages/core/src/index.ts"],
 			"@vow-auth/adapter-memory": ["./packages/adapter-memory/src/index.ts"],
 			"@vow-auth/adapter-redis": ["./packages/adapter-redis/src/index.ts"],

@@ -14,16 +14,13 @@ import {
 	createOutboxWorker,
 	createSealer,
 	createSessionTokens,
+	createSignIn,
 	createTokens,
-	evaluatePolicy,
 	type Factor,
 	fail,
-	issueSession,
 	type Result,
 	type RevocationLevel,
-	resolveIdentity,
 	succeed,
-	verifyProof,
 } from "@vow-auth/core";
 import { createEmailLink } from "@vow-auth/factor-email-link";
 
@@ -233,83 +230,64 @@ export async function createPlayground(): Promise<Playground> {
 		maximumAttempts: 5,
 	});
 
+	const runSignIn = createSignIn({
+		identities,
+		sessionTokens,
+		mutateIdentity,
+		policy: ({ subject }) => (bannedSubjects.has(subject) ? "deny" : "allow"),
+		sessionTimeToLiveMilliseconds: SESSION_TIME_TO_LIVE_MILLISECONDS,
+		audit,
+	});
+
+	const statusOf = (error: string): number => {
+		switch (error) {
+			case "invalid-request":
+				return 400;
+			case "invalid-proof":
+				return 401;
+			case "no-allow":
+			case "forbidden":
+				return 403;
+			default:
+				return 422;
+		}
+	};
+
 	const signIn = async (
 		tenant: string,
 		device: string,
 		factor: Factor,
 		response: unknown,
 	): Promise<Response> => {
-		if (tenant === "" || device === "") {
-			return respond(400, { error: "tenant and device are required" });
+		const result = await runSignIn({ tenant, device, factor, response });
+
+		if (!result.ok) {
+			return respond(statusOf(result.error), { error: result.error });
 		}
 
-		const proof = await verifyProof(factor, response, { audit });
-
-		if (!proof.ok) {
-			return respond(401, { error: proof.error });
-		}
-
-		const resolution = await resolveIdentity(identities, tenant, proof.value, {
-			audit,
-		});
-
-		if (!resolution.ok) {
-			return respond(422, { error: resolution.error });
-		}
-
-		const { subjectId, outcome } = resolution.value;
-		const known = subjects.get(subjectId) ?? {
+		const signedIn = result.value;
+		const known = subjects.get(signedIn.subject) ?? {
 			tenant,
 			emails: new Set<string>(),
 		};
 
-		if (proof.value.claims.email !== undefined) {
-			known.emails.add(proof.value.claims.email.address);
+		if (signedIn.email !== undefined) {
+			known.emails.add(signedIn.email);
 		}
 
-		subjects.set(subjectId, known);
+		subjects.set(signedIn.subject, known);
 
-		if (proof.value.claims.emailVerified) {
-			const confirmed = await mutateIdentity(tenant, subjectId, {
-				type: "confirm-email",
-				proof: proof.value,
-			});
-
-			for (const evicted of confirmed.ok
-				? confirmed.value.affectedSubjects
-				: []) {
-				subjects.delete(evicted);
-			}
-		}
-
-		const decision = await evaluatePolicy(
-			subjectId,
-			(id) => (bannedSubjects.has(id) ? "deny" : "allow"),
-			{ audit, tenant },
-		);
-		const session = issueSession(decision);
-
-		if (!session.ok) {
-			return respond(403, { error: session.error });
-		}
-
-		const token = await sessionTokens.issue(session.value, {
-			tenant,
-			device,
-			timeToLiveMilliseconds: SESSION_TIME_TO_LIVE_MILLISECONDS,
-		});
-
-		if (!token.ok) {
-			return respond(500, { error: token.error });
+		for (const evicted of signedIn.evicted) {
+			subjects.delete(evicted);
 		}
 
 		return respond(200, {
-			token: token.value,
+			token: signedIn.token,
 			tenant,
-			subject: subjectId,
+			subject: signedIn.subject,
 			device,
-			session: session.value.id,
-			identity: outcome,
+			session: signedIn.session,
+			identity: signedIn.identity,
 		});
 	};
 

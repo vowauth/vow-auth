@@ -25,7 +25,7 @@ export type MutationOutcome = {
 export type MutateIdentityOptions = {
 	readonly store: IdentityStore;
 	readonly sessionTokens: Pick<SessionTokens, "revoke">;
-	readonly audit?: AuditSink;
+	readonly audit?: AuditSink | undefined;
 };
 
 /** Changes a subject of a tenant, with every consequence, and reports the subjects it touched. */

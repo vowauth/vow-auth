@@ -16,7 +16,7 @@ import type { TokenStore } from "./token-store.js";
 /** Options for creating the tokens primitive. */
 export type TokensOptions = {
 	readonly store: TokenStore;
-	readonly audit?: AuditSink;
+	readonly audit?: AuditSink | undefined;
 };
 
 /** Parameters of a token to issue. */

@@ -13,12 +13,12 @@ import {
 	evaluatePolicy,
 	type Factor,
 	type IdentityStore,
-	issueSession,
 	type Result,
 	resolveIdentity,
 	succeed,
 	verifyProof,
 } from "@vow-auth/core";
+import { issueSession } from "@vow-auth/core/testing";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 beforeEach(() => {

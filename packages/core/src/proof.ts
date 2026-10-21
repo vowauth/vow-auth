@@ -59,7 +59,7 @@ export type Factor = {
 /** Options of `verifyProof`. */
 export type VerifyProofOptions = {
 	readonly now?: () => number;
-	readonly audit?: AuditSink;
+	readonly audit?: AuditSink | undefined;
 };
 
 const CLAIM_KEYS: readonly string[] = [

@@ -31,7 +31,7 @@ export type Decision =
 
 /** Options of `evaluatePolicy`. */
 export type EvaluatePolicyOptions = {
-	readonly audit?: AuditSink;
+	readonly audit?: AuditSink | undefined;
 	/** Only for the audit record: the tenant the decision is about. */
 	readonly tenant?: string;
 };

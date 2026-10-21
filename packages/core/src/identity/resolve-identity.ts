@@ -29,7 +29,7 @@ export type Resolution = {
 
 /** Options of `resolveIdentity`. */
 export type ResolveIdentityOptions = {
-	readonly audit?: AuditSink;
+	readonly audit?: AuditSink | undefined;
 };
 
 /**

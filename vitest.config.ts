@@ -4,6 +4,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
 	resolve: {
 		alias: {
+			"@vow-auth/core/testing": fileURLToPath(
+				new URL("./packages/core/src/testing.ts", import.meta.url),
+			),
 			"@vow-auth/core": fileURLToPath(
 				new URL("./packages/core/src/index.ts", import.meta.url),
 			),
