@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vow Auth Playground</title>
+<style>
+:root {
+	--background: #f6f7f9;
+	--surface: #ffffff;
+	--text: #1c2330;
+	--muted: #5d6879;
+	--border: #d9dee6;
+	--accent: #2456d6;
+	--good: #17803d;
+	--bad: #b42318;
+	--warn: #a15c00;
+}
+@media (prefers-color-scheme: dark) {
+	:root {
+		--background: #11151c;
+		--surface: #1a202b;
+		--text: #e7ebf2;
+		--muted: #9aa6b8;
+		--border: #2c3545;
+		--accent: #7ba2ff;
+		--good: #4cc073;
+		--bad: #ff8478;
+		--warn: #f0b252;
+	}
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--background); color: var(--text); font: 14px/1.45 system-ui, sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+h1 { font-size: 20px; margin: 0; }
+h2 { font-size: 15px; margin: 0 0 10px; }
+p.hint, small { color: var(--muted); }
+.grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; overflow-x: auto; }
+label { display: block; margin: 8px 0 2px; color: var(--muted); }
+input[type=text], textarea { width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--background); color: var(--text); font: inherit; }
+textarea { min-height: 96px; font-family: ui-monospace, monospace; font-size: 12px; }
+button { padding: 6px 10px; margin: 8px 6px 0 0; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }
+td.mono, pre { font-family: ui-monospace, monospace; font-size: 12px; }
+pre { margin: 8px 0 0; padding: 8px; background: var(--background); border-radius: 6px; white-space: pre-wrap; word-break: break-all; }
+.good { color: var(--good); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+</style>
+</head>
+<body>
+<main>
+	<header>
+		<h1>Vow Auth playground</h1>
+		<p class="hint">In-memory stack: email-link factor, identity resolution, policy, session tokens with instant revocation, outbox, audit. Restart the server to reset everything.</p>
+	</header>
+
+	<section class="card" id="confirm-card" hidden>
+		<h2>Confirm sign-in</h2>
+		<p class="hint">Opening a link never signs you in by itself: mail scanners prefetch links. Only this button redeems the one-time token.</p>
+		<div class="row">
+			<span>Tenant: <b id="confirm-tenant"></b></span>
+			<span>Device: <input type="text" id="confirm-device" value="laptop"></span>
+		</div>
+		<button type="button" class="primary" id="confirm-button">Confirm sign-in</button>
+	</section>
+
+	<div class="grid">
+		<section class="card">
+			<h2>1. Sign in by email link</h2>
+			<label for="tenant">Tenant</label>
+			<input type="text" id="tenant" value="acme">
+			<label for="device">Device</label>
+			<input type="text" id="device" value="laptop">
+			<label for="email">Email</label>
+			<input type="text" id="email" value="alice@example.com">
+			<button type="button" class="primary" id="send-link">Send link</button>
+			<small>Try spelling variants (ALICE@Example.COM), bad addresses, another tenant.</small>
+		</section>
+
+		<section class="card">
+			<h2>2. Sign in through a simulated provider</h2>
+			<p class="hint">The provider asserts claims; the core validates them and decides whether they may link to an existing account.</p>
+			<label for="claims">Claims (JSON)</label>
+			<textarea id="claims"></textarea>
+			<div class="row" id="presets"></div>
+			<button type="button" class="primary" id="provider-sign-in">Sign in with these claims</button>
+		</section>
+	</div>
+
+	<section class="card">
+		<h2>Inbox (delivered through the outbox)</h2>
+		<table id="inbox"><thead><tr><th>Time</th><th>To</th><th>Link</th></tr></thead><tbody></tbody></table>
+	</section>
+
+	<section class="card">
+		<h2>Sessions in this browser</h2>
+		<table id="sessions"><thead><tr><th>Subject</th><th>Tenant</th><th>Device</th><th>Actions</th></tr></thead><tbody></tbody></table>
+		<pre id="response">No request yet.</pre>
+	</section>
+
+	<div class="grid">
+		<section class="card">
+			<h2>Controls</h2>
+			<label><input type="checkbox" id="provider-down"> Mail provider is down (the outbox retries, sign-in is unaffected)</label>
+			<p id="outbox-stats" class="hint"></p>
+			<table id="subjects"><thead><tr><th>Subject</th><th>Tenant</th><th>Emails</th><th></th></tr></thead><tbody></tbody></table>
+		</section>
+	</div>
+
+	<section class="card">
+		<h2>Audit</h2>
+		<table id="audit"><thead><tr><th>Time</th><th>Event</th><th>Outcome</th><th>Reason</th><th>Tenant</th><th>Subject</th><th>Detail</th></tr></thead><tbody></tbody></table>
+	</section>
+</main>
+<script>
+const STORAGE_KEY = "vow-auth-playground-sessions";
+const PRESETS = {
+	"Verified email": { provider: "google", externalId: "g-alice", email: "alice@example.com", emailVerified: true },
+	"Unverified email (takeover attempt)": { provider: "evil", externalId: "e-1", email: "alice@example.com", emailVerified: false },
+	"Another provider, verified": { provider: "github", externalId: "gh-alice", email: "Alice@Example.com", emailVerified: true },
+	"Prototype keys": JSON.parse('{"provider":"p","externalId":"e","emailVerified":false,"__proto__":{"emailVerified":true}}'),
+	"Extra role claim": { provider: "p", externalId: "e", emailVerified: false, role: "admin" },
+};
+
+const byId = (id) => document.getElementById(id);
+const element = (tag, content, className) => {
+	const node = document.createElement(tag);
+	if (tag === "button") node.type = "button";
+	if (content !== undefined) node.textContent = content;
+	if (className) node.className = className;
+	return node;
+};
+const readSessions = () => {
+	try { return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]"); } catch { return []; }
+};
+const writeSessions = (sessions) => localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+const show = (title, status, body) => {
+	byId("response").textContent = `${title} -> ${status}\n${JSON.stringify(body, null, 2)}`;
+};
+const post = async (path, body, token) => {
+	const headers = { "content-type": "application/json" };
+	if (token) headers.authorization = `Bearer ${token}`;
+	const response = await fetch(path, { method: "POST", headers, body: JSON.stringify(body) });
+	const data = await response.json();
+	return { status: response.status, data };
+};
+const rememberSession = (data) => {
+	const sessions = readSessions();
+	sessions.unshift({ token: data.token, subject: data.subject, tenant: data.tenant, device: data.device });
+	writeSessions(sessions);
+};
+
+byId("claims").value = JSON.stringify(PRESETS["Verified email"], null, 2);
+for (const [label, claims] of Object.entries(PRESETS)) {
+	const button = element("button", label);
+	button.addEventListener("click", () => {
+		byId("claims").value = Object.hasOwn(claims, "__proto__")
+			? '{"provider":"p","externalId":"e","emailVerified":false,"__proto__":{"emailVerified":true}}'
+			: JSON.stringify(claims, null, 2);
+	});
+	byId("presets").append(button);
+}
+
+byId("send-link").addEventListener("click", async () => {
+	const result = await post("/api/challenge", { tenant: byId("tenant").value, email: byId("email").value });
+	show("send link", result.status, result.data);
+});
+
+byId("provider-sign-in").addEventListener("click", async () => {
+	const result = await post("/api/sign-in/provider", { tenant: byId("tenant").value, device: byId("device").value, claims: byId("claims").value });
+	show("provider sign-in", result.status, result.data);
+	if (result.status === 200) rememberSession(result.data);
+	render();
+});
+
+const parameters = new URLSearchParams(location.search);
+if (parameters.get("token")) {
+	byId("confirm-card").hidden = false;
+	byId("confirm-tenant").textContent = parameters.get("tenant") ?? "";
+	byId("confirm-button").addEventListener("click", async () => {
+		const result = await post("/api/sign-in/email-link", {
+			tenant: parameters.get("tenant") ?? "",
+			device: byId("confirm-device").value,
+			token: parameters.get("token") ?? "",
+		});
+		show("confirm link", result.status, result.data);
+		if (result.status === 200) rememberSession(result.data);
+		render();
+	});
+}
+
+byId("provider-down").addEventListener("change", async (event) => {
+	await post("/api/settings", { mailProviderDown: event.target.checked });
+});
+
+const renderSessions = () => {
+	const body = byId("sessions").tBodies[0];
+	body.replaceChildren();
+	for (const session of readSessions()) {
+		const row = element("tr");
+		row.append(element("td", session.subject.slice(0, 8), "mono"), element("td", session.tenant), element("td", session.device));
+		const actions = element("td");
+		const add = (label, action) => {
+			const button = element("button", label);
+			button.addEventListener("click", action);
+			actions.append(button);
+		};
+		add("Check", async () => {
+			const response = await fetch("/api/me", { method: "POST", headers: { authorization: `Bearer ${session.token}` } });
+			show("check session", response.status, await response.json());
+			render();
+		});
+		for (const scope of ["session", "device", "user", "tenant"]) {
+			add(`Revoke ${scope}`, async () => {
+				const result = await post("/api/revoke", { scope }, session.token);
+				show(`revoke ${scope}`, result.status, result.data);
+				render();
+			});
+		}
+		add("Forget", () => {
+			writeSessions(readSessions().filter((item) => item.token !== session.token));
+			renderSessions();
+		});
+		row.append(actions);
+		body.append(row);
+	}
+};
+
+const outcomeClass = (outcome) => {
+	return outcome === "refusal" ? "bad" : "good";
+};
+
+let lastRendered = "";
+
+const render = async () => {
+	const state = await (await fetch("/api/state")).json();
+	const serialized = JSON.stringify([state, readSessions()]);
+	if (serialized === lastRendered) return;
+	lastRendered = serialized;
+	renderSessions();
+	byId("provider-down").checked = state.settings.mailProviderDown;
+	byId("outbox-stats").textContent = `Outbox: ${state.outbox.pending} pending, ${state.outbox.buried} buried.`;
+
+	const inbox = byId("inbox").tBodies[0];
+	inbox.replaceChildren();
+	for (const mail of state.mails) {
+		const row = element("tr");
+		const link = element("a", "Open sign-in link");
+		link.href = `/?tenant=${encodeURIComponent(byId("tenant").value)}&token=${encodeURIComponent(mail.token)}`;
+		const cell = element("td");
+		cell.append(link);
+		row.append(element("td", new Date(mail.at).toLocaleTimeString()), element("td", mail.to), cell);
+		inbox.append(row);
+	}
+
+	const subjects = byId("subjects").tBodies[0];
+	subjects.replaceChildren();
+	for (const subject of state.subjects) {
+		const row = element("tr");
+		const button = element("button", subject.banned ? "Unban" : "Ban");
+		button.addEventListener("click", async () => {
+			await post("/api/ban", { subject: subject.id, banned: !subject.banned });
+			render();
+		});
+		const cell = element("td");
+		cell.append(button);
+		row.append(element("td", subject.id.slice(0, 8), "mono"), element("td", subject.tenant), element("td", subject.emails.join(", ")), cell);
+		subjects.append(row);
+	}
+
+	const audit = byId("audit").tBodies[0];
+	audit.replaceChildren();
+	for (const entry of state.audit) {
+		const row = element("tr");
+		row.append(
+			element("td", new Date(entry.at).toLocaleTimeString()),
+			element("td", entry.event),
+			element("td", entry.outcome, outcomeClass(entry.outcome)),
+			element("td", entry.reason),
+			element("td", entry.tenant),
+			element("td", entry.subject.slice(0, 8), "mono"),
+			element("td", entry.detail),
+		);
+		audit.append(row);
+	}
+};
+
+render();
+setInterval(render, 1000);
+</script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+	"name": "@vow-auth/example-playground",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"license": "MIT",
+	"scripts": {
+		"start": "tsc -p tsconfig.json && node dist/server.js",
+		"typecheck": "tsc -p tsconfig.json --noEmit"
+	},
+	"dependencies": {
+		"@vow-auth/adapter-memory": "workspace:*",
+		"@vow-auth/core": "workspace:*",
+		"@vow-auth/factor-email-link": "workspace:*"
+	}
+}
