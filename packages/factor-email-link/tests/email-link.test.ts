@@ -1,9 +1,12 @@
 import {
 	createMemoryEpochStore,
 	createMemoryIdentityStore,
+	createMemoryOutboxStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
 import {
+	createEmit,
+	createOutboxWorker,
 	createSealer,
 	createSessionTokens,
 	createTokens,
@@ -214,4 +217,53 @@ test("a failing delivery reaches the caller", async () => {
 	await expect(emailLink.challenge("alice@example.com")).rejects.toThrow(
 		"mail is down",
 	);
+});
+
+test("delivery through the outbox keeps the sign-in alive while the mail provider is down", async () => {
+	const outbox = createMemoryOutboxStore();
+	const emit = createEmit(outbox);
+	const emailLink = createEmailLink({
+		tokens: createTokens({
+			store: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
+		}),
+		deliver: async (message) => {
+			const recorded = await emit({
+				type: "email.send",
+				payload: { to: message.email, token: message.token },
+			});
+
+			if (!recorded.ok) {
+				throw new Error("the outbox must accept the event");
+			}
+		},
+		timeToLiveMilliseconds: FIFTEEN_MINUTES,
+	});
+	const sentMails: string[] = [];
+	let providerIsUp = false;
+	const worker = createOutboxWorker({
+		store: outbox,
+		handlers: {
+			"email.send": async (event) => {
+				if (!providerIsUp) {
+					throw new Error("mail provider is down");
+				}
+
+				sentMails.push(event.payload.token ?? "");
+			},
+		},
+		batchSize: 10,
+		leaseMilliseconds: 1_000,
+		retryDelayMilliseconds: 1,
+		maximumAttempts: 5,
+	});
+
+	expect((await emailLink.challenge("alice@example.com")).ok).toBe(true);
+	expect((await worker.runOnce()).retried).toBe(1);
+
+	providerIsUp = true;
+	await new Promise((resolve) => setTimeout(resolve, 5));
+	expect((await worker.runOnce()).completed).toBe(1);
+
+	const proof = await verifyProof(emailLink.factor, sentMails[0]);
+	expect(proof.ok).toBe(true);
 });

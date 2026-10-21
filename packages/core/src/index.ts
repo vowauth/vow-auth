@@ -14,6 +14,20 @@ export {
 	type ResolutionOutcome,
 	resolveIdentity,
 } from "./identity/resolve-identity.js";
+export { createEmit, type Emit } from "./outbox/emit.js";
+export type {
+	ClaimInput,
+	DomainEvent,
+	OutboxRecord,
+	OutboxStore,
+} from "./outbox/outbox-store.js";
+export {
+	createOutboxWorker,
+	type OutboxHandler,
+	type OutboxRunSummary,
+	type OutboxWorker,
+	type OutboxWorkerOptions,
+} from "./outbox/outbox-worker.js";
 export {
 	type Factor,
 	type IdentityClaims,
