@@ -35,10 +35,16 @@ export type VerifiedSession = {
 
 /** A level to revoke; revoking a level revokes every token whose chain contains it. */
 export type RevocationLevel =
-	| { readonly tenant: string; readonly scope: "tenant" }
 	| {
 			readonly tenant: string;
-			readonly scope: "user" | "device" | "session";
+			readonly scope: typeof REVOCATION_SCOPES.tenant;
+	  }
+	| {
+			readonly tenant: string;
+			readonly scope:
+				| typeof REVOCATION_SCOPES.user
+				| typeof REVOCATION_SCOPES.device
+				| typeof REVOCATION_SCOPES.session;
 			readonly id: string;
 	  };
 
@@ -52,11 +58,23 @@ export type SessionTokens = {
 	revoke(level: RevocationLevel): Promise<void>;
 };
 
-type Scope = "tenant" | "user" | "device" | "session";
+const REVOCATION_SCOPES = {
+	tenant: "tenant",
+	user: "user",
+	device: "device",
+	session: "session",
+} as const;
+
+type Scope = (typeof REVOCATION_SCOPES)[keyof typeof REVOCATION_SCOPES];
 type Link = readonly [scope: Scope, id: string, stamp: number];
 
 const SESSION_PURPOSE = "session";
-const CHAIN_SCOPES: readonly Scope[] = ["tenant", "user", "device", "session"];
+const CHAIN_SCOPES: readonly Scope[] = [
+	REVOCATION_SCOPES.tenant,
+	REVOCATION_SCOPES.user,
+	REVOCATION_SCOPES.device,
+	REVOCATION_SCOPES.session,
+];
 
 const keyOf = (tenant: string, scope: Scope, id: string): string => {
 	return `{${encodeURIComponent(tenant)}}:${scope}:${encodeURIComponent(id)}`;
@@ -157,10 +175,10 @@ export function createSessionTokens(
 			}
 
 			const levels: readonly (readonly [Scope, string])[] = [
-				["tenant", input.tenant],
-				["user", session.subject],
-				["device", input.device],
-				["session", session.id],
+				[REVOCATION_SCOPES.tenant, input.tenant],
+				[REVOCATION_SCOPES.user, session.subject],
+				[REVOCATION_SCOPES.device, input.device],
+				[REVOCATION_SCOPES.session, session.id],
 			];
 			const reading = await readEpochs(
 				epochs,
@@ -228,7 +246,8 @@ export function createSessionTokens(
 			});
 		},
 		async revoke(level) {
-			const id = level.scope === "tenant" ? level.tenant : level.id;
+			const id =
+				level.scope === REVOCATION_SCOPES.tenant ? level.tenant : level.id;
 
 			await epochs.revoke(
 				keyOf(level.tenant, level.scope, id),

@@ -4,10 +4,20 @@ import { fail, type Result, succeed } from "../result.js";
 import { canonicalizeEmail } from "./canonical-email.js";
 import type { IdentityStore } from "./identity-store.js";
 
+/** How an identity resolved. */
+export const RESOLUTION_OUTCOMES = {
+	created: "created",
+	existing: "existing",
+	linked: "linked",
+} as const;
+
+export type ResolutionOutcome =
+	(typeof RESOLUTION_OUTCOMES)[keyof typeof RESOLUTION_OUTCOMES];
+
 /** The subject an identity resolved to, and how. */
 export type Resolution = {
 	readonly subjectId: string;
-	readonly outcome: "existing" | "linked" | "created";
+	readonly outcome: ResolutionOutcome;
 };
 
 const EMAIL_PROVIDER = "email";
@@ -64,7 +74,10 @@ export async function resolveIdentity(
 	);
 
 	if (existing !== undefined) {
-		return succeed({ subjectId: existing, outcome: "existing" });
+		return succeed({
+			subjectId: existing,
+			outcome: RESOLUTION_OUTCOMES.existing,
+		});
 	}
 
 	if (identity.emailVerified) {
@@ -76,7 +89,7 @@ export async function resolveIdentity(
 		if (owner !== undefined) {
 			const subjectId = await store.linkIdentity(tenantId, owner, identity);
 
-			return succeed({ subjectId, outcome: "linked" });
+			return succeed({ subjectId, outcome: RESOLUTION_OUTCOMES.linked });
 		}
 	}
 
@@ -84,6 +97,8 @@ export async function resolveIdentity(
 
 	return succeed({
 		subjectId: created.subjectId,
-		outcome: created.created ? "created" : "existing",
+		outcome: created.created
+			? RESOLUTION_OUTCOMES.created
+			: RESOLUTION_OUTCOMES.existing,
 	});
 }

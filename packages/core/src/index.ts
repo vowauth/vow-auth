@@ -1,8 +1,17 @@
-export { type Decision, evaluatePolicy } from "./decision.js";
+export {
+	DECISION_KINDS,
+	DENY_REASONS,
+	type Decision,
+	type DenyReason,
+	evaluatePolicy,
+} from "./decision.js";
 export { ERROR_CODES } from "./errors.js";
+export { canonicalizeEmail } from "./identity/canonical-email.js";
 export type { IdentityStore } from "./identity/identity-store.js";
 export {
+	RESOLUTION_OUTCOMES,
 	type Resolution,
+	type ResolutionOutcome,
 	resolveIdentity,
 } from "./identity/resolve-identity.js";
 export {

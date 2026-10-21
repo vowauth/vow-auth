@@ -1,11 +1,30 @@
 import { createMintRegistry } from "./shared/mint-registry.js";
 
+/** The two kinds of decision. */
+export const DECISION_KINDS = { allow: "allow", deny: "deny" } as const;
+
+/** Why a decision is a deny. */
+export const DENY_REASONS = {
+	notAllowed: "not-allowed",
+	policyError: "policy-error",
+} as const;
+
+export type DenyReason = (typeof DENY_REASONS)[keyof typeof DENY_REASONS];
+
 /** Verdict of a policy evaluation. Only `allow` can be turned into a session. */
 export type Decision =
-	| { readonly kind: "allow"; readonly subject: string }
-	| { readonly kind: "deny"; readonly reason: string };
+	| {
+			readonly kind: typeof DECISION_KINDS.allow;
+			readonly subject: string;
+	  }
+	| {
+			readonly kind: typeof DECISION_KINDS.deny;
+			readonly reason: DenyReason;
+	  };
 
-type AllowDecision = Extract<Decision, { kind: "allow" }>;
+type AllowDecision = Extract<Decision, { kind: typeof DECISION_KINDS.allow }>;
+
+const ALLOW_VERDICT = "allow";
 
 const mintedAllowDecisions = createMintRegistry<AllowDecision>();
 
@@ -24,14 +43,16 @@ export async function evaluatePolicy(
 	try {
 		verdict = await policy(subject);
 	} catch {
-		return { kind: "deny", reason: "policy-error" };
+		return { kind: DECISION_KINDS.deny, reason: DENY_REASONS.policyError };
 	}
 
-	if (verdict !== "allow") {
-		return { kind: "deny", reason: "not-allowed" };
+	if (verdict !== ALLOW_VERDICT) {
+		return { kind: DECISION_KINDS.deny, reason: DENY_REASONS.notAllowed };
 	}
 
-	return mintedAllowDecisions.mint(Object.freeze({ kind: "allow", subject }));
+	return mintedAllowDecisions.mint(
+		Object.freeze({ kind: DECISION_KINDS.allow, subject }),
+	);
 }
 
 export const isMintedAllow = mintedAllowDecisions.has;

@@ -10,6 +10,9 @@ export default defineConfig({
 			"@vow-auth/adapter-memory": fileURLToPath(
 				new URL("./packages/adapter-memory/src/index.ts", import.meta.url),
 			),
+			"@vow-auth/factor-email-link": fileURLToPath(
+				new URL("./packages/factor-email-link/src/index.ts", import.meta.url),
+			),
 			"@vow-auth/adapter-redis": fileURLToPath(
 				new URL("./packages/adapter-redis/src/index.ts", import.meta.url),
 			),

@@ -202,6 +202,15 @@ importers:
 
   packages/core: {}
 
+  packages/factor-email-link:
+    devDependencies:
+      '@vow-auth/adapter-memory':
+        specifier: workspace:*
+        version: link:../adapter-memory
+      '@vow-auth/core':
+        specifier: workspace:*
+        version: link:../core
+
 packages:
 
   '@biomejs/biome@2.5.15':
