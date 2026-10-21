@@ -37,7 +37,8 @@ const post = (overrides: Partial<Post> = {}): Post => ({
 	...overrides,
 });
 
-const context = { tenant: "acme", subject: "u1" };
+const silent: AuditSink = async () => undefined;
+const context = { tenant: "acme", subject: "u1", audit: silent };
 
 const collect = () => {
 	const records: AuditRecord[] = [];

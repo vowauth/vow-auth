@@ -11,10 +11,10 @@ import {
 	createSessionTokens,
 	createTokens,
 	evaluatePolicy,
+	issueSession,
 	resolveIdentity,
 	verifyProof,
-} from "@vow-auth/core";
-import { issueSession } from "@vow-auth/core/testing";
+} from "@vow-auth/core/internal";
 import {
 	createEmailLink,
 	type EmailLinkMessage,

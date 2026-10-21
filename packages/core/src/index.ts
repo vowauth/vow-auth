@@ -8,13 +8,12 @@ export {
 	type AuditSink,
 	report,
 } from "./audit.js";
+export { type Auth, type AuthOptions, createAuth } from "./auth.js";
 export {
 	DECISION_KINDS,
 	DENY_REASONS,
 	type Decision,
 	type DenyReason,
-	type EvaluatePolicyOptions,
-	evaluatePolicy,
 } from "./decision.js";
 export { ERROR_CODES } from "./errors.js";
 export {
@@ -22,19 +21,15 @@ export {
 	canonicalizeEmail,
 } from "./identity/canonical-email.js";
 export type { IdentityStore } from "./identity/identity-store.js";
-export {
-	createMutateIdentity,
-	type IdentityChange,
-	type MutateIdentity,
-	type MutateIdentityOptions,
-	type MutationOutcome,
+export type {
+	IdentityChange,
+	MutateIdentity,
+	MutationOutcome,
 } from "./identity/mutate-identity.js";
 export {
 	RESOLUTION_OUTCOMES,
 	type Resolution,
 	type ResolutionOutcome,
-	type ResolveIdentityOptions,
-	resolveIdentity,
 } from "./identity/resolve-identity.js";
 export { createEmit, type Emit } from "./outbox/emit.js";
 export type {
@@ -56,42 +51,25 @@ export {
 	type IdentityClaims,
 	type Proof,
 	type ProofStrength,
-	type VerifyProofOptions,
-	verifyProof,
 } from "./proof.js";
 export { fail, type Result, succeed } from "./result.js";
-export {
-	createSealer,
-	type Sealer,
-	type SealerOptions,
-	type SealInput,
-	type SecretVersion,
-} from "./sealer.js";
+export type { Sealer, SealInput, SecretVersion } from "./sealer.js";
 export type { Session } from "./session.js";
 export type {
 	EpochReading,
 	EpochStore,
 } from "./session-tokens/epoch-store.js";
-export {
-	createSessionTokens,
-	type IssueSessionTokenInput,
-	type RevocationLevel,
-	type SessionTokens,
-	type SessionTokensOptions,
-	type VerifiedSession,
+export type {
+	IssueSessionTokenInput,
+	RevocationLevel,
+	SessionTokens,
+	VerifiedSession,
 } from "./session-tokens/session-tokens.js";
-export {
-	createSignIn,
-	type SignedIn,
-	type SignIn,
-	type SignInOptions,
-	type SignInPolicyInput,
-	type SignInRequest,
+export type {
+	SignedIn,
+	SignIn,
+	SignInPolicyInput,
+	SignInRequest,
 } from "./sign-in.js";
 export type { TokenRecord, TokenStore } from "./tokens/token-store.js";
-export {
-	createTokens,
-	type IssueTokenInput,
-	type Tokens,
-	type TokensOptions,
-} from "./tokens/tokens.js";
+export type { IssueTokenInput, Tokens } from "./tokens/tokens.js";

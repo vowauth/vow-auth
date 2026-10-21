@@ -5,8 +5,8 @@ import {
 	createSealer,
 	createSessionTokens,
 	evaluatePolicy,
-} from "@vow-auth/core";
-import { issueSession } from "@vow-auth/core/testing";
+	issueSession,
+} from "@vow-auth/core/internal";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 const redisUrl = process.env.VOW_AUTH_REDIS_URL;

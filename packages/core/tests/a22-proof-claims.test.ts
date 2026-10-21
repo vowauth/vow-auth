@@ -4,7 +4,7 @@ import {
 	type Result,
 	succeed,
 	verifyProof,
-} from "@vow-auth/core";
+} from "@vow-auth/core/internal";
 import fastCheck from "fast-check";
 import { expect, test } from "vitest";
 

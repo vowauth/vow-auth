@@ -1,5 +1,4 @@
-import { evaluatePolicy } from "@vow-auth/core";
-import { issueSession } from "@vow-auth/core/testing";
+import { evaluatePolicy, issueSession } from "@vow-auth/core/internal";
 import fastCheck from "fast-check";
 import { expect, test } from "vitest";
 

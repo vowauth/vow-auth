@@ -32,7 +32,7 @@ export type AuthorizeRequest<
 export type AuthorizeContext = {
 	readonly tenant: string;
 	readonly subject: string;
-	readonly audit?: AuditSink;
+	readonly audit: AuditSink;
 };
 
 /**

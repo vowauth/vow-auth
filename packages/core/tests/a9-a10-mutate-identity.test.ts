@@ -11,12 +11,12 @@ import {
 	evaluatePolicy,
 	type Factor,
 	type IdentityStore,
+	issueSession,
 	type Proof,
 	resolveIdentity,
 	succeed,
 	verifyProof,
-} from "@vow-auth/core";
-import { issueSession } from "@vow-auth/core/testing";
+} from "@vow-auth/core/internal";
 import { expect, test, vi } from "vitest";
 
 const LIFE_TIME = 60_000;

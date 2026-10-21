@@ -9,13 +9,9 @@ import {
 	AUDIT_OUTCOMES,
 	type AuditOutcome,
 	type AuditSink,
+	createAuth,
 	createEmit,
-	createMutateIdentity,
 	createOutboxWorker,
-	createSealer,
-	createSessionTokens,
-	createSignIn,
-	createTokens,
 	type Factor,
 	fail,
 	type Result,
@@ -161,26 +157,18 @@ export async function createPlayground(): Promise<Playground> {
 	};
 
 	const identities = createMemoryIdentityStore();
-	const tokens = createTokens({
-		store: createMemoryTokenStore({ maximumBytes: MEMORY_BUDGET_BYTES }),
-		audit,
-	});
-	const sessionTokens = createSessionTokens({
-		sealer: createSealer({
-			secrets: [{ version: 1, value: randomSecret() }],
-			audit,
-		}),
+	const auth = createAuth({
+		identities,
 		epochs: createMemoryEpochStore({ maximumBytes: MEMORY_BUDGET_BYTES }),
+		tokenStore: createMemoryTokenStore({ maximumBytes: MEMORY_BUDGET_BYTES }),
+		secrets: [{ version: 1, value: randomSecret() }],
 		maximumLifeTimeMilliseconds: SESSION_TIME_TO_LIVE_MILLISECONDS,
-		audit,
-	});
-	const mutateIdentity = createMutateIdentity({
-		store: identities,
-		sessionTokens,
+		sessionTimeToLiveMilliseconds: SESSION_TIME_TO_LIVE_MILLISECONDS,
+		policy: ({ subject }) => (bannedSubjects.has(subject) ? "deny" : "allow"),
 		audit,
 	});
 	const emailLink = createEmailLink({
-		tokens,
+		tokens: auth.tokens,
 		deliver: async (message) => {
 			await emit({
 				type: "email.send",
@@ -230,14 +218,7 @@ export async function createPlayground(): Promise<Playground> {
 		maximumAttempts: 5,
 	});
 
-	const runSignIn = createSignIn({
-		identities,
-		sessionTokens,
-		mutateIdentity,
-		policy: ({ subject }) => (bannedSubjects.has(subject) ? "deny" : "allow"),
-		sessionTimeToLiveMilliseconds: SESSION_TIME_TO_LIVE_MILLISECONDS,
-		audit,
-	});
+	const runSignIn = auth.signIn;
 
 	const statusOf = (error: string): number => {
 		switch (error) {
@@ -393,14 +374,14 @@ export async function createPlayground(): Promise<Playground> {
 					parseClaims(text(body, "claims")),
 				);
 			case "/api/me": {
-				const verified = await sessionTokens.verify(bearerToken(request));
+				const verified = await auth.sessions.verify(bearerToken(request));
 
 				return verified.ok
 					? respond(200, verified.value)
 					: respond(401, { error: verified.error });
 			}
 			case "/api/revoke": {
-				const verified = await sessionTokens.verify(bearerToken(request));
+				const verified = await auth.sessions.verify(bearerToken(request));
 
 				if (!verified.ok) {
 					return respond(401, { error: verified.error });
@@ -412,7 +393,7 @@ export async function createPlayground(): Promise<Playground> {
 					return respond(400, { error: level.error });
 				}
 
-				await sessionTokens.revoke(level.value);
+				await auth.sessions.revoke(level.value);
 
 				return respond(200, { ok: true, revoked: level.value.scope });
 			}
@@ -437,7 +418,7 @@ export async function createPlayground(): Promise<Playground> {
 					return respond(404, { error: "no-subject" });
 				}
 
-				const deleted = await mutateIdentity(known.tenant, subject, {
+				const deleted = await auth.mutateIdentity(known.tenant, subject, {
 					type: "delete",
 				});
 

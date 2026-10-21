@@ -13,7 +13,7 @@ import {
 	type ProofStrength,
 	type SignInPolicyInput,
 	succeed,
-} from "@vow-auth/core";
+} from "@vow-auth/core/internal";
 import { expect, test, vi } from "vitest";
 
 const LIFE_TIME = 60_000;
@@ -67,10 +67,23 @@ const createFixture = (options: {
 	return { issueSpy, sessionTokens, signIn };
 };
 
-test("A14: the public API has no way to create a session", () => {
+test("A14: the public API has no way to create a session or to build a part without the audit", () => {
 	expect(Object.keys(core)).not.toContain("issueSession");
-	expect(Object.keys(core)).not.toContain("isBornSession");
-	expect(Object.keys(core)).toContain("createSignIn");
+	expect(Object.keys(core)).toContain("createAuth");
+
+	for (const building of [
+		"isBornSession",
+		"createSignIn",
+		"createTokens",
+		"createSealer",
+		"createSessionTokens",
+		"createMutateIdentity",
+		"verifyProof",
+		"resolveIdentity",
+		"evaluatePolicy",
+	]) {
+		expect(Object.keys(core), building).not.toContain(building);
+	}
 	// @ts-expect-error a plugin importing the core cannot reach issueSession
 	expect(core.issueSession).toBeUndefined();
 });

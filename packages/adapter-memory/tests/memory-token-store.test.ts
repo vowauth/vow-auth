@@ -3,7 +3,7 @@ import {
 	createTokens,
 	type TokenRecord,
 	type TokenStore,
-} from "@vow-auth/core";
+} from "@vow-auth/core/internal";
 import fastCheck from "fast-check";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
