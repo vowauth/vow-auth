@@ -10,6 +10,7 @@ import {
 	type AuditOutcome,
 	type AuditSink,
 	createEmit,
+	createMutateIdentity,
 	createOutboxWorker,
 	createSealer,
 	createSessionTokens,
@@ -176,6 +177,11 @@ export async function createPlayground(): Promise<Playground> {
 		maximumLifeTimeMilliseconds: SESSION_TIME_TO_LIVE_MILLISECONDS,
 		audit,
 	});
+	const mutateIdentity = createMutateIdentity({
+		store: identities,
+		sessionTokens,
+		audit,
+	});
 	const emailLink = createEmailLink({
 		tokens,
 		deliver: async (message) => {
@@ -262,6 +268,19 @@ export async function createPlayground(): Promise<Playground> {
 		}
 
 		subjects.set(subjectId, known);
+
+		if (proof.value.claims.emailVerified) {
+			const confirmed = await mutateIdentity(tenant, subjectId, {
+				type: "confirm-email",
+				proof: proof.value,
+			});
+
+			for (const evicted of confirmed.ok
+				? confirmed.value.affectedSubjects
+				: []) {
+				subjects.delete(evicted);
+			}
+		}
 
 		const decision = await evaluatePolicy(
 			subjectId,
@@ -431,6 +450,24 @@ export async function createPlayground(): Promise<Playground> {
 				);
 
 				return respond(200, settings);
+			}
+			case "/api/delete-subject": {
+				const subject = text(body, "subject");
+				const known = subjects.get(subject);
+
+				if (known === undefined) {
+					return respond(404, { error: "no-subject" });
+				}
+
+				const deleted = await mutateIdentity(known.tenant, subject, {
+					type: "delete",
+				});
+
+				subjects.delete(subject);
+
+				return deleted.ok
+					? respond(200, { ok: true })
+					: respond(422, { error: deleted.error });
 			}
 			case "/api/ban": {
 				const subject = text(body, "subject");

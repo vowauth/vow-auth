@@ -191,6 +191,54 @@ test("malformed claims and banned subjects get no session", async () => {
 	expect(banned.status).toBe(403);
 });
 
+test("confirming an email evicts the earlier claim and its session, and a delete ends every session", async () => {
+	const playground = await createPlayground();
+	const squatter = await call(playground, "/api/sign-in/provider", {
+		tenant: "acme",
+		device: "phone",
+		claims: JSON.stringify({
+			provider: "evil",
+			externalId: "e-1",
+			email: "victim@example.com",
+			emailVerified: false,
+		}),
+	});
+
+	await call(playground, "/api/challenge", {
+		tenant: "acme",
+		email: "victim@example.com",
+	});
+	const token = (await stateOf(playground)).mails[0].token;
+	const victim = await call(playground, "/api/sign-in/email-link", {
+		tenant: "acme",
+		device: "laptop",
+		token,
+	});
+
+	expect(
+		(await call(playground, "/api/me", {}, squatter.data.token)).status,
+	).toBe(401);
+	expect(
+		(await call(playground, "/api/me", {}, victim.data.token)).status,
+	).toBe(200);
+
+	await call(playground, "/api/delete-subject", {
+		subject: victim.data.subject,
+	});
+
+	expect(
+		(await call(playground, "/api/me", {}, victim.data.token)).status,
+	).toBe(401);
+
+	const facts = (await stateOf(playground)).audit.map(
+		(entry: { event: string; reason: string }) =>
+			`${entry.event}:${entry.reason}`,
+	);
+
+	expect(facts).toContain("identity.mutate:email-confirmed");
+	expect(facts).toContain("identity.mutate:deleted");
+});
+
 test("revoking one device leaves the other signed in", async () => {
 	const playground = await createPlayground();
 	const claims = JSON.stringify({

@@ -266,8 +266,14 @@ const render = async () => {
 			await post("/api/ban", { subject: subject.id, banned: !subject.banned });
 			render();
 		});
+		const remove = element("button", "Delete");
+		remove.addEventListener("click", async () => {
+			const result = await post("/api/delete-subject", { subject: subject.id });
+			show("delete subject", result.status, result.data);
+			render();
+		});
 		const cell = element("td");
-		cell.append(button);
+		cell.append(button, remove);
 		row.append(element("td", subject.id.slice(0, 8), "mono"), element("td", subject.tenant), element("td", subject.emails.join(", ")), cell);
 		subjects.append(row);
 	}

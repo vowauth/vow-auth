@@ -23,6 +23,13 @@ export {
 } from "./identity/canonical-email.js";
 export type { IdentityStore } from "./identity/identity-store.js";
 export {
+	createMutateIdentity,
+	type IdentityChange,
+	type MutateIdentity,
+	type MutateIdentityOptions,
+	type MutationOutcome,
+} from "./identity/mutate-identity.js";
+export {
 	RESOLUTION_OUTCOMES,
 	type Resolution,
 	type ResolutionOutcome,

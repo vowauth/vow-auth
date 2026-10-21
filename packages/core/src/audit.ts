@@ -1,6 +1,7 @@
 /** Names of the events the core reports. Applications may report their own events through the same sink. */
 export const AUDIT_EVENTS = {
 	authorizeCheck: "authorize.check",
+	identityMutate: "identity.mutate",
 	identityResolve: "identity.resolve",
 	policyEvaluate: "policy.evaluate",
 	proofVerify: "proof.verify",
@@ -29,6 +30,8 @@ export const AUDIT_REASONS = {
 	allowed: "allowed",
 	authorizeError: "authorize-error",
 	consumed: "consumed",
+	deleted: "deleted",
+	emailConfirmed: "email-confirmed",
 	expired: "expired",
 	factorError: "factor-error",
 	factorRejected: "factor-rejected",
@@ -41,8 +44,10 @@ export const AUDIT_REASONS = {
 	malformedChain: "malformed-chain",
 	noProof: "no-proof",
 	notFound: "not-found",
+	notOwner: "not-owner",
 	revoked: "revoked",
 	undecryptable: "undecryptable",
+	unverified: "unverified",
 	unknownVersion: "unknown-version",
 	verified: "verified",
 	wrongPurpose: "wrong-purpose",
