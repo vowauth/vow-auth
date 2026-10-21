@@ -1,8 +1,17 @@
 export {
+	AUDIT_EVENTS,
+	AUDIT_OUTCOMES,
+	AUDIT_REASONS,
+	type AuditOutcome,
+	type AuditRecord,
+	type AuditSink,
+} from "./audit.js";
+export {
 	DECISION_KINDS,
 	DENY_REASONS,
 	type Decision,
 	type DenyReason,
+	type EvaluatePolicyOptions,
 	evaluatePolicy,
 } from "./decision.js";
 export { ERROR_CODES } from "./errors.js";
@@ -12,6 +21,7 @@ export {
 	RESOLUTION_OUTCOMES,
 	type Resolution,
 	type ResolutionOutcome,
+	type ResolveIdentityOptions,
 	resolveIdentity,
 } from "./identity/resolve-identity.js";
 export { createEmit, type Emit } from "./outbox/emit.js";

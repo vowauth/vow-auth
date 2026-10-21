@@ -1,3 +1,10 @@
+import {
+	AUDIT_EVENTS,
+	AUDIT_OUTCOMES,
+	AUDIT_REASONS,
+	type AuditSink,
+	report,
+} from "../audit.js";
 import { ERROR_CODES } from "../errors.js";
 import { fail, type Result, succeed } from "../result.js";
 import type { Sealer } from "../sealer.js";
@@ -16,6 +23,7 @@ export type SessionTokensOptions = {
 	 * revocation without any margin.
 	 */
 	readonly maximumLifeTimeMilliseconds: number;
+	readonly audit?: AuditSink;
 };
 
 /** Where a session token is used and how long it lives. */
@@ -142,12 +150,17 @@ const tenantOf = (chain: readonly Link[]): string => {
  * a level kills every token below it at once, and a verification costs one
  * read of the epoch store. The sealer's own expiry by the local clock is an
  * outer bound that can only reject earlier. Every rejection reports the same
- * `invalid-session` error.
+ * `invalid-session` error; the audit records why, including which level was
+ * revoked. Issuing is recorded before the token is made, so a failing sink
+ * means no token; a revocation is made first and recorded after, so a failing
+ * sink never blocks it. Successful verifications are not recorded: they are
+ * the hot path.
  */
 export function createSessionTokens(
 	options: SessionTokensOptions,
 ): SessionTokens {
 	const { sealer, epochs, maximumLifeTimeMilliseconds } = options;
+	const audit = own(options, "audit");
 
 	if (
 		!Number.isFinite(maximumLifeTimeMilliseconds) ||
@@ -173,6 +186,15 @@ export function createSessionTokens(
 					"timeToLiveMilliseconds must be positive and at most maximumLifeTimeMilliseconds",
 				);
 			}
+
+			await report(audit, {
+				event: AUDIT_EVENTS.sessionIssue,
+				outcome: AUDIT_OUTCOMES.success,
+				reason: AUDIT_REASONS.issued,
+				tenant: input.tenant,
+				subject: session.subject,
+				detail: { device: input.device, session: session.id },
+			});
 
 			const levels: readonly (readonly [Scope, string])[] = [
 				[REVOCATION_SCOPES.tenant, input.tenant],
@@ -206,13 +228,39 @@ export function createSessionTokens(
 			);
 		},
 		async verify(token) {
-			const unsealed = await sealer.unseal(token, SESSION_PURPOSE);
-			const chain = unsealed.ok
-				? parseChain(own(unsealed.value, "chain"))
-				: undefined;
+			const refuse = async (
+				reason: string,
+				tenant: string,
+				subject: string,
+				detail: Readonly<Record<string, string>>,
+			) => {
+				await report(audit, {
+					event: AUDIT_EVENTS.sessionVerify,
+					outcome: AUDIT_OUTCOMES.refusal,
+					reason,
+					tenant,
+					subject,
+					detail,
+				});
 
-			if (chain === undefined) {
 				return fail(ERROR_CODES.invalidSession);
+			};
+			const unsealed = await sealer.unseal(token, SESSION_PURPOSE);
+
+			if (!unsealed.ok) {
+				return refuse(AUDIT_REASONS.invalidSeal, "", "", {});
+			}
+
+			const chain = parseChain(own(unsealed.value, "chain"));
+			const [, user, device, session] = chain ?? [];
+
+			if (
+				chain === undefined ||
+				user === undefined ||
+				device === undefined ||
+				session === undefined
+			) {
+				return refuse(AUDIT_REASONS.malformedChain, "", "", {});
 			}
 
 			const tenant = tenantOf(chain);
@@ -221,21 +269,25 @@ export function createSessionTokens(
 				chain.map(([scope, id]) => keyOf(tenant, scope, id)),
 			);
 			const expiresAtMilliseconds = Number(
-				unsealed.ok ? own(unsealed.value, "expiresAtMilliseconds") : undefined,
+				own(unsealed.value, "expiresAtMilliseconds"),
 			);
-			const [, user, device, session] = chain;
 
-			if (
-				user === undefined ||
-				device === undefined ||
-				session === undefined ||
-				!(reading.now < expiresAtMilliseconds) ||
-				!chain.every(
-					([, , stamp], index) =>
-						stamp >= (reading.stamps[index] ?? Number.NaN),
-				)
-			) {
-				return fail(ERROR_CODES.invalidSession);
+			if (!(reading.now < expiresAtMilliseconds)) {
+				return refuse(AUDIT_REASONS.expired, tenant, user[1], {
+					device: device[1],
+				});
+			}
+
+			const revokedIndex = chain.findIndex(
+				([, , stamp], index) =>
+					!(stamp >= (reading.stamps[index] ?? Number.NaN)),
+			);
+
+			if (revokedIndex !== -1) {
+				return refuse(AUDIT_REASONS.revoked, tenant, user[1], {
+					device: device[1],
+					scope: chain[revokedIndex]?.[0] ?? "",
+				});
 			}
 
 			return succeed({
@@ -253,6 +305,14 @@ export function createSessionTokens(
 				keyOf(level.tenant, level.scope, id),
 				maximumLifeTimeMilliseconds,
 			);
+			await report(audit, {
+				event: AUDIT_EVENTS.sessionRevoke,
+				outcome: AUDIT_OUTCOMES.success,
+				reason: AUDIT_REASONS.revoked,
+				tenant: level.tenant,
+				subject: level.scope === REVOCATION_SCOPES.user ? level.id : "",
+				detail: { scope: level.scope, id },
+			});
 		},
 	};
 }

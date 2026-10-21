@@ -11,6 +11,12 @@
 			]
 		}
 	},
-	"include": ["vitest.config.ts", "packages/**/*.ts", "packages/**/*.tsx"],
+	"include": [
+		"vitest.config.ts",
+		"packages/**/*.ts",
+		"packages/**/*.tsx",
+		"examples/*/src/**/*.ts",
+		"examples/*/tests/**/*.ts"
+	],
 	"exclude": ["node_modules", "**/dist"]
 }

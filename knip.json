@@ -7,6 +7,9 @@
 		},
 		"packages/*": {
 			"entry": ["tests/**/*.test.ts"]
+		},
+		"examples/*": {
+			"entry": ["src/server.ts", "tests/**/*.test.ts"]
 		}
 	}
 }

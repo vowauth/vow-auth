@@ -1,6 +1,14 @@
+import {
+	AUDIT_EVENTS,
+	AUDIT_OUTCOMES,
+	AUDIT_REASONS,
+	type AuditSink,
+	report,
+} from "../audit.js";
 import { ERROR_CODES } from "../errors.js";
 import { type IdentityClaims, isMintedProof } from "../proof.js";
 import { fail, type Result, succeed } from "../result.js";
+import { own } from "../shared/own.js";
 import { canonicalizeEmail } from "./canonical-email.js";
 import type { IdentityStore } from "./identity-store.js";
 
@@ -20,22 +28,49 @@ export type Resolution = {
 	readonly outcome: ResolutionOutcome;
 };
 
+/** Options of `resolveIdentity`. */
+export type ResolveIdentityOptions = {
+	readonly audit?: AuditSink;
+};
+
 const EMAIL_PROVIDER = "email";
 
 /**
- * Maps a proof to a subject inside one tenant. This is the only place emails
- * are canonicalized and the only place identities are linked. An identity is
- * linked to an existing subject only when the proof carries a verified email
- * that already belongs, verified, to that subject; an unverified claim never
- * links and never takes over an account. Provider `email` is identified by its
- * canonical email address.
+ * Maps a proof to a subject inside one tenant. This is the only place
+ * identities are linked. An identity is linked to an existing subject only
+ * when the proof carries a verified email that already belongs, verified, to
+ * that subject; an unverified claim never links and never takes over an
+ * account. Provider `email` is identified by its canonical email address. A
+ * link is recorded in the audit before it is made, so a failing sink prevents
+ * it; a new subject is recorded right after it is created, and a failing sink
+ * then leaves a subject that nothing uses.
  */
 export async function resolveIdentity(
 	store: IdentityStore,
 	tenantId: string,
 	proof: unknown,
+	options: ResolveIdentityOptions = {},
 ): Promise<Result<Resolution>> {
+	const audit = own(options, "audit");
+	const record = (
+		outcome: typeof AUDIT_OUTCOMES.success | typeof AUDIT_OUTCOMES.refusal,
+		reason: string,
+		subject: string,
+		provider: string,
+	) => {
+		return report(audit, {
+			event: AUDIT_EVENTS.identityResolve,
+			outcome,
+			reason,
+			tenant: tenantId,
+			subject,
+			detail: { provider },
+		});
+	};
+
 	if (!isMintedProof(proof)) {
+		await record(AUDIT_OUTCOMES.refusal, AUDIT_REASONS.noProof, "", "");
+
 		return fail(ERROR_CODES.noProof);
 	}
 
@@ -45,6 +80,13 @@ export async function resolveIdentity(
 		email = canonicalizeEmail(proof.claims.email);
 
 		if (email === undefined) {
+			await record(
+				AUDIT_OUTCOMES.refusal,
+				AUDIT_REASONS.invalidEmail,
+				"",
+				proof.claims.provider,
+			);
+
 			return fail(ERROR_CODES.invalidEmail);
 		}
 	}
@@ -74,6 +116,13 @@ export async function resolveIdentity(
 	);
 
 	if (existing !== undefined) {
+		await record(
+			AUDIT_OUTCOMES.success,
+			RESOLUTION_OUTCOMES.existing,
+			existing,
+			identity.provider,
+		);
+
 		return succeed({
 			subjectId: existing,
 			outcome: RESOLUTION_OUTCOMES.existing,
@@ -87,6 +136,12 @@ export async function resolveIdentity(
 		);
 
 		if (owner !== undefined) {
+			await record(
+				AUDIT_OUTCOMES.success,
+				RESOLUTION_OUTCOMES.linked,
+				owner,
+				identity.provider,
+			);
 			const subjectId = await store.linkIdentity(tenantId, owner, identity);
 
 			return succeed({ subjectId, outcome: RESOLUTION_OUTCOMES.linked });
@@ -94,11 +149,16 @@ export async function resolveIdentity(
 	}
 
 	const created = await store.createSubject(tenantId, identity);
+	const outcome = created.created
+		? RESOLUTION_OUTCOMES.created
+		: RESOLUTION_OUTCOMES.existing;
 
-	return succeed({
-		subjectId: created.subjectId,
-		outcome: created.created
-			? RESOLUTION_OUTCOMES.created
-			: RESOLUTION_OUTCOMES.existing,
-	});
+	await record(
+		AUDIT_OUTCOMES.success,
+		outcome,
+		created.subjectId,
+		identity.provider,
+	);
+
+	return succeed({ subjectId: created.subjectId, outcome });
 }

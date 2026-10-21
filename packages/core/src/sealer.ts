@@ -1,3 +1,10 @@
+import {
+	AUDIT_EVENTS,
+	AUDIT_OUTCOMES,
+	AUDIT_REASONS,
+	type AuditSink,
+	report,
+} from "./audit.js";
 import { ERROR_CODES } from "./errors.js";
 import { fail, type Result, succeed } from "./result.js";
 import { own } from "./shared/own.js";
@@ -17,6 +24,7 @@ export type SealerOptions = {
 	 * characters long, for example `openssl rand -base64 32`.
 	 */
 	readonly secrets: readonly SecretVersion[];
+	readonly audit?: AuditSink;
 };
 
 /** Parameters of a value to seal. */
@@ -164,15 +172,60 @@ const requireValidSecrets = (
  * HKDF from the current secret, a random salt and the purpose, so a value
  * sealed for one purpose never unseals for another and the number of sealed
  * values per secret has no nonce limit. Every rejection reports the same
- * `invalid-seal` error.
+ * `invalid-seal` error; the audit records why: malformed, unknown secret
+ * version, undecryptable (wrong purpose, wrong secret or tampered) or expired.
  */
 export function createSealer(options: SealerOptions): Sealer {
 	const { secrets } = options;
+	const audit = own(options, "audit");
 	const currentSecret = requireValidSecrets(secrets);
 	const currentKey = importSecret(currentSecret.value);
 	const secretKeys = new Map(
 		secrets.map((secret) => [secret.version, importSecret(secret.value)]),
 	);
+
+	const open = async (
+		sealed: string,
+		purpose: string,
+	): Promise<
+		| { readonly payload: Readonly<Record<string, string>> }
+		| { readonly reason: string }
+	> => {
+		const parsed = parseSealed(sealed);
+
+		if (parsed === undefined) {
+			return { reason: AUDIT_REASONS.malformed };
+		}
+
+		const secretKey = secretKeys.get(parsed.version);
+
+		if (secretKey === undefined) {
+			return { reason: AUDIT_REASONS.unknownVersion };
+		}
+
+		try {
+			const bytes = fromBase64Url(parsed.body);
+			const plaintext = await crypto.subtle.decrypt(
+				{
+					name: "AES-GCM",
+					iv: bytes.slice(SALT_BYTES, SALT_BYTES + INITIALIZATION_VECTOR_BYTES),
+				},
+				await deriveMessageKey(
+					await secretKey,
+					bytes.slice(0, SALT_BYTES),
+					purpose,
+				),
+				bytes.slice(SALT_BYTES + INITIALIZATION_VECTOR_BYTES),
+			);
+			const contents: SealedContents = JSON.parse(decoder.decode(plaintext));
+
+			return Date.now() < contents.expiresAtMilliseconds
+				? { payload: contents.payload }
+				: { reason: AUDIT_REASONS.expired };
+		} catch {
+			return { reason: AUDIT_REASONS.undecryptable };
+		}
+	};
 
 	return {
 		async seal(input) {
@@ -205,41 +258,22 @@ export function createSealer(options: SealerOptions): Sealer {
 			)}`;
 		},
 		async unseal(sealed, purpose) {
-			const parsed = parseSealed(sealed);
-			const secretKey =
-				parsed === undefined ? undefined : secretKeys.get(parsed.version);
+			const opened = await open(sealed, purpose);
 
-			if (parsed === undefined || secretKey === undefined) {
+			if ("reason" in opened) {
+				await report(audit, {
+					event: AUDIT_EVENTS.sealUnseal,
+					outcome: AUDIT_OUTCOMES.refusal,
+					reason: opened.reason,
+					tenant: "",
+					subject: "",
+					detail: { purpose },
+				});
+
 				return fail(ERROR_CODES.invalidSeal);
 			}
 
-			try {
-				const bytes = fromBase64Url(parsed.body);
-				const plaintext = await crypto.subtle.decrypt(
-					{
-						name: "AES-GCM",
-						iv: bytes.slice(
-							SALT_BYTES,
-							SALT_BYTES + INITIALIZATION_VECTOR_BYTES,
-						),
-					},
-					await deriveMessageKey(
-						await secretKey,
-						bytes.slice(0, SALT_BYTES),
-						purpose,
-					),
-					bytes.slice(SALT_BYTES + INITIALIZATION_VECTOR_BYTES),
-				);
-				const contents: SealedContents = JSON.parse(decoder.decode(plaintext));
-
-				if (!(Date.now() < contents.expiresAtMilliseconds)) {
-					return fail(ERROR_CODES.invalidSeal);
-				}
-
-				return succeed(contents.payload);
-			} catch {
-				return fail(ERROR_CODES.invalidSeal);
-			}
+			return succeed(opened.payload);
 		},
 	};
 }

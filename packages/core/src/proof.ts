@@ -1,3 +1,10 @@
+import {
+	AUDIT_EVENTS,
+	AUDIT_OUTCOMES,
+	AUDIT_REASONS,
+	type AuditSink,
+	report,
+} from "./audit.js";
 import { ERROR_CODES } from "./errors.js";
 import { fail, type Result, succeed } from "./result.js";
 import { isRow } from "./shared/is-row.js";
@@ -44,6 +51,7 @@ export type Factor = {
 /** Options of `verifyProof`. */
 export type VerifyProofOptions = {
 	readonly now?: () => number;
+	readonly audit?: AuditSink;
 };
 
 const CLAIM_KEYS: readonly string[] = [
@@ -102,26 +110,58 @@ const parseClaims = (raw: unknown): IdentityClaims | undefined => {
  * Runs a factor and mints a proof from what it established. The claims are
  * validated against the closed claim shape and copied from own properties
  * only. Every refusal, whether the factor rejected the response, threw, or
- * returned malformed claims, reports the same `invalid-proof` error.
+ * returned malformed claims, reports the same `invalid-proof` error; the
+ * audit tells them apart. A verified proof is recorded before it is minted:
+ * if the sink throws, there is no proof.
  */
 export async function verifyProof(
 	factor: Factor,
 	response: unknown,
 	options: VerifyProofOptions = {},
 ): Promise<Result<Proof>> {
+	const audit = own(options, "audit");
+	const refuse = async (reason: string): Promise<Result<Proof>> => {
+		await report(audit, {
+			event: AUDIT_EVENTS.proofVerify,
+			outcome: AUDIT_OUTCOMES.refusal,
+			reason,
+			tenant: "",
+			subject: "",
+			detail: { factor: factor.id },
+		});
+
+		return fail(ERROR_CODES.invalidProof);
+	};
 	let outcome: Result<unknown>;
 
 	try {
 		outcome = await factor.verify(response);
 	} catch {
-		return fail(ERROR_CODES.invalidProof);
+		return refuse(AUDIT_REASONS.factorError);
 	}
 
-	const claims = outcome.ok ? parseClaims(outcome.value) : undefined;
+	if (!outcome.ok) {
+		return refuse(AUDIT_REASONS.factorRejected);
+	}
+
+	const claims = parseClaims(outcome.value);
 
 	if (claims === undefined) {
-		return fail(ERROR_CODES.invalidProof);
+		return refuse(AUDIT_REASONS.invalidClaims);
 	}
+
+	await report(audit, {
+		event: AUDIT_EVENTS.proofVerify,
+		outcome: AUDIT_OUTCOMES.success,
+		reason: AUDIT_REASONS.verified,
+		tenant: "",
+		subject: "",
+		detail: {
+			factor: factor.id,
+			provider: claims.provider,
+			emailVerified: String(claims.emailVerified),
+		},
+	});
 
 	return succeed(
 		mintedProofs.mint(
