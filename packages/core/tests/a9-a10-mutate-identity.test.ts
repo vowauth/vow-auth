@@ -17,6 +17,7 @@ import {
 	succeed,
 	verifyProof,
 } from "@vow-auth/core/internal";
+import { durationOf } from "@vow-auth/store-contracts";
 import { expect, test, vi } from "vitest";
 
 const LIFE_TIME = 60_000;
@@ -84,7 +85,7 @@ const createFixture = (audit?: AuditSink) => {
 		const token = await sessionTokens.issue(session.value, {
 			tenant,
 			device,
-			timeToLiveMilliseconds: LIFE_TIME,
+			timeToLive: durationOf(LIFE_TIME),
 		});
 
 		if (!token.ok) {

@@ -19,6 +19,7 @@ import {
 	createEmailLink,
 	type EmailLinkMessage,
 } from "@vow-auth/factor-email-link";
+import { durationOf } from "@vow-auth/store-contracts";
 import { expect, test } from "vitest";
 
 const FIFTEEN_MINUTES = 15 * 60 * 1_000;
@@ -33,7 +34,7 @@ const createFixture = () => {
 		deliver: async (message) => {
 			sent.push(message);
 		},
-		timeToLiveMilliseconds: FIFTEEN_MINUTES,
+		timeToLive: durationOf(FIFTEEN_MINUTES),
 	});
 	const identities = createMemoryIdentityStore();
 	const sessionTokens = createSessionTokens({
@@ -91,7 +92,7 @@ test("a link signs a person in end to end and revocation ends the session", asyn
 	const token = await sessionTokens.issue(session.value, {
 		tenant: "acme",
 		device: "laptop",
-		timeToLiveMilliseconds: FIFTEEN_MINUTES,
+		timeToLive: durationOf(FIFTEEN_MINUTES),
 	});
 
 	if (!token.ok) {
@@ -145,7 +146,7 @@ test("a token issued for another purpose does not open the factor", async () => 
 	const foreign = await tokens.issue({
 		purpose: "oauth-state",
 		payload: { email: "alice@example.com" },
-		timeToLiveMilliseconds: FIFTEEN_MINUTES,
+		timeToLive: durationOf(FIFTEEN_MINUTES),
 	});
 
 	expect((await verifyProof(emailLink.factor, foreign)).ok).toBe(false);
@@ -155,7 +156,7 @@ test("a token without an address is refused", async () => {
 	const { emailLink, tokens } = createFixture();
 	const bare = await tokens.issue({
 		purpose: "email-link",
-		timeToLiveMilliseconds: FIFTEEN_MINUTES,
+		timeToLive: durationOf(FIFTEEN_MINUTES),
 	});
 
 	expect((await verifyProof(emailLink.factor, bare)).ok).toBe(false);
@@ -211,7 +212,7 @@ test("a failing delivery reaches the caller", async () => {
 		deliver: async () => {
 			throw new Error("mail is down");
 		},
-		timeToLiveMilliseconds: FIFTEEN_MINUTES,
+		timeToLive: durationOf(FIFTEEN_MINUTES),
 	});
 
 	await expect(emailLink.challenge("alice@example.com")).rejects.toThrow(
@@ -236,7 +237,7 @@ test("delivery through the outbox keeps the sign-in alive while the mail provide
 				throw new Error("the outbox must accept the event");
 			}
 		},
-		timeToLiveMilliseconds: FIFTEEN_MINUTES,
+		timeToLive: durationOf(FIFTEEN_MINUTES),
 	});
 	const sentMails: string[] = [];
 	let providerIsUp = false;

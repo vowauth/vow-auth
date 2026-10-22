@@ -1,4 +1,6 @@
+import { defineDuration } from "@vow-auth/core";
 import { createSealer, type SecretVersion } from "@vow-auth/core/internal";
+import { durationOf } from "@vow-auth/store-contracts";
 import fastCheck from "fast-check";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
@@ -24,7 +26,7 @@ const sealOAuthState = (secrets: readonly SecretVersion[]) => {
 	return createSealer({ secrets }).seal({
 		purpose: "oauth-state",
 		payload: { codeVerifier: "verifier" },
-		timeToLiveMilliseconds: 600_000,
+		timeToLive: durationOf(600_000),
 	});
 };
 
@@ -125,14 +127,23 @@ test("weak or inconsistent secrets are a configuration error", () => {
 	}
 });
 
-test("a non-positive or non-finite lifetime is a programming error", async () => {
+test("A26: a lifetime the core cannot use is refused where it is defined, and a look-alike is refused where it is used", async () => {
 	const sealer = createSealer({ secrets: [firstSecret] });
 
-	for (const timeToLiveMilliseconds of [Number.NaN, 0, -1, Infinity]) {
-		await expect(
-			sealer.seal({ purpose: "oauth-state", timeToLiveMilliseconds }),
-		).rejects.toThrow(RangeError);
+	for (const milliseconds of [Number.NaN, 0, -1, Infinity, -Infinity]) {
+		expect(defineDuration(milliseconds)).toEqual({
+			ok: false,
+			error: "invalid-request",
+		});
 	}
+
+	await expect(
+		sealer.seal({
+			purpose: "oauth-state",
+			// @ts-expect-error a look-alike that did not come from defineDuration
+			timeToLive: { milliseconds: 1_000 },
+		}),
+	).rejects.toThrow(TypeError);
 });
 
 test("a malformed value or an unknown version never reaches the cryptography", async () => {

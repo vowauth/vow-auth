@@ -1,3 +1,4 @@
+import { meterRuleOf } from "@vow-auth/store-contracts";
 import { describe, expect, test } from "vitest";
 import {
 	claimsFactor,
@@ -178,7 +179,7 @@ describe.each(MODES)("A27: the invariants hold the same in %s mode", (mode) => {
 	test("A32: the meter refuses over the limit with the same shape, and observing refuses nothing", async () => {
 		const { surface } = createService(mode);
 		const scope = { tenant: "acme", actor: "alice", resource: "email-link" };
-		const rule = { limit: 2, windowMilliseconds: 60_000 };
+		const rule = meterRuleOf({ limit: 2, windowMilliseconds: 60_000 });
 		const results = [];
 
 		for (let request = 0; request < 3; request += 1) {
@@ -196,7 +197,10 @@ describe.each(MODES)("A27: the invariants hold the same in %s mode", (mode) => {
 
 		const observation = await surface.meter.observe(scope, rule);
 
-		expect(observation.wouldRefuse).toBe(true);
+		expect(observation).toMatchObject({
+			ok: true,
+			value: { wouldRefuse: true },
+		});
 		expect(
 			(await surface.meter.consume({ ...scope, actor: "bob" }, rule)).ok,
 		).toBe(true);
@@ -261,7 +265,7 @@ describe.each(MODES)("A27: the invariants hold the same in %s mode", (mode) => {
 				steps.push(
 					await surface.meter.consume(
 						{ tenant: "acme", actor: "a", resource: "r" },
-						{ limit: 1, windowMilliseconds: 60_000 },
+						meterRuleOf({ limit: 1, windowMilliseconds: 60_000 }),
 					),
 				);
 

@@ -14,6 +14,7 @@ import {
 	type SignInPolicyInput,
 	succeed,
 } from "@vow-auth/core/internal";
+import { durationOf } from "@vow-auth/store-contracts";
 import { expect, test, vi } from "vitest";
 
 const LIFE_TIME = 60_000;
@@ -92,7 +93,7 @@ test("A14: a session that was not born in the flow gets no token", async () => {
 	const { sessionTokens } = createFixture({});
 	const forged = await sessionTokens.issue(
 		{ id: "s-1", subject: "admin" },
-		{ tenant: "acme", device: "laptop", timeToLiveMilliseconds: LIFE_TIME },
+		{ tenant: "acme", device: "laptop", timeToLive: durationOf(LIFE_TIME) },
 	);
 
 	expect(forged.ok).toBe(false);

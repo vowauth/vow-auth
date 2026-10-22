@@ -5,6 +5,7 @@ import {
 	type AuditSink,
 	report,
 } from "../audit.js";
+import { type Duration, isDuration } from "../duration.js";
 import { ERROR_CODES } from "../errors.js";
 import { fail, type Result, succeed } from "../result.js";
 import type { Sealer } from "../sealer.js";
@@ -33,7 +34,7 @@ export type SessionTokensOptions = {
 export type IssueSessionTokenInput = {
 	readonly tenant: string;
 	readonly device: string;
-	readonly timeToLiveMilliseconds: number;
+	readonly timeToLive: Duration;
 };
 
 /** The identity a valid session token carries. */
@@ -177,13 +178,10 @@ export function createSessionTokens(
 			}
 
 			if (
-				!Number.isFinite(input.timeToLiveMilliseconds) ||
-				input.timeToLiveMilliseconds <= 0 ||
-				input.timeToLiveMilliseconds > maximumLifeTimeMilliseconds
+				!isDuration(input.timeToLive) ||
+				input.timeToLive.milliseconds > maximumLifeTimeMilliseconds
 			) {
-				throw new RangeError(
-					"timeToLiveMilliseconds must be positive and at most maximumLifeTimeMilliseconds",
-				);
+				return fail(ERROR_CODES.invalidRequest);
 			}
 
 			await report(audit, {
@@ -222,10 +220,10 @@ export function createSessionTokens(
 					payload: {
 						chain: JSON.stringify(chain),
 						expiresAtMilliseconds: String(
-							reading.now + input.timeToLiveMilliseconds,
+							reading.now + input.timeToLive.milliseconds,
 						),
 					},
-					timeToLiveMilliseconds: input.timeToLiveMilliseconds,
+					timeToLive: input.timeToLive,
 				}),
 			);
 		},

@@ -234,22 +234,36 @@ test("a body of the wrong shape, with an unknown key or a prototype key, is 400"
 	}
 });
 
-test("numbers that the core cannot count are 400, not a failure of the server", async () => {
+test("A26: a rule the core cannot count is 400, a cost it cannot count is an ordinary refusal", async () => {
 	const { auth } = createCore();
 	const handler = createHandler(auth);
 	const scope = { tenant: "a", actor: "b", resource: "c" };
 
-	for (const [rule, cost] of [
-		[{ limit: 0, windowMilliseconds: 1_000 }, undefined],
-		[{ limit: 1, windowMilliseconds: 1.5 }, undefined],
-		[{ limit: 1, windowMilliseconds: 1_000 }, 5],
-		[{ limit: 1, windowMilliseconds: 1_000 }, 0],
-	] as const) {
-		const response = await handler(
-			post("/v1/meter/consume", { scope, rule, cost }),
-		);
+	for (const route of ["/v1/meter/consume", "/v1/meter/observe"]) {
+		for (const rule of [
+			{ limit: 0, windowMilliseconds: 1_000 },
+			{ limit: 1, windowMilliseconds: 1.5 },
+		]) {
+			const response = await handler(post(route, { scope, rule }));
 
-		expect(response.status, JSON.stringify({ rule, cost })).toBe(400);
+			expect(response.status, `${route} ${JSON.stringify(rule)}`).toBe(400);
+		}
+
+		for (const cost of [5, 0]) {
+			const response = await handler(
+				post(route, {
+					scope,
+					rule: { limit: 1, windowMilliseconds: 1_000 },
+					cost,
+				}),
+			);
+
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({
+				ok: false,
+				error: { code: "invalid-request" },
+			});
+		}
 	}
 });
 

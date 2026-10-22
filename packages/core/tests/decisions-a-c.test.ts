@@ -8,6 +8,7 @@ import {
 	isStoreFullError,
 } from "@vow-auth/core";
 import { createMeter, createTokens } from "@vow-auth/core/internal";
+import { durationOf, meterRuleOf } from "@vow-auth/store-contracts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 beforeEach(() => {
@@ -19,8 +20,18 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
-const RULE = { limit: 3, windowMilliseconds: 1_000 };
+const RULE = meterRuleOf({ limit: 3, windowMilliseconds: 1_000 });
 const SCOPE = { tenant: "acme", actor: "alice", resource: "email-link" };
+
+const unwrap = <Value>(
+	result: { readonly ok: true; readonly value: Value } | { readonly ok: false },
+): Value => {
+	if (!result.ok) {
+		throw new Error("the meter must accept this rule");
+	}
+
+	return result.value;
+};
 
 const collect = () => {
 	const records: AuditRecord[] = [];
@@ -40,7 +51,7 @@ test("C4: observe never refuses and records only what enforcement would have ref
 	const seen = [];
 
 	for (let request = 0; request < 5; request += 1) {
-		seen.push(await meter.observe(SCOPE, RULE));
+		seen.push(unwrap(await meter.observe(SCOPE, RULE)));
 	}
 
 	expect(seen.map((observation) => observation.wouldRefuse)).toEqual([
@@ -70,7 +81,7 @@ test("C4: what observe sees is exactly what consume would enforce on the same tr
 	for (const step of [0, 0, 0, 0, 400, 300, 0, 600, 1_000, 0, 0]) {
 		vi.setSystemTime(Date.now() + step);
 
-		const watching = await observed.observe(SCOPE, RULE);
+		const watching = unwrap(await observed.observe(SCOPE, RULE));
 		const enforcing = await enforced.consume(SCOPE, RULE);
 
 		expect(watching.wouldRefuse).toBe(!enforcing.ok);
@@ -127,7 +138,7 @@ test("A2: a full token store refuses a new token and keeps every pending one", a
 			issued.push(
 				await tokens.issue({
 					purpose: "email-link",
-					timeToLiveMilliseconds: 60_000,
+					timeToLive: durationOf(60_000),
 				}),
 			);
 		} catch (error) {
@@ -165,6 +176,6 @@ test("A2: a token the store could not keep is never handed out", async () => {
 	});
 
 	await expect(
-		tokens.issue({ purpose: "email-link", timeToLiveMilliseconds: 1_000 }),
+		tokens.issue({ purpose: "email-link", timeToLive: durationOf(1_000) }),
 	).rejects.toThrow("the token store is down");
 });

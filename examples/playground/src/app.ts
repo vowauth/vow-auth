@@ -14,6 +14,8 @@ import {
 	createAuth,
 	createEmit,
 	createOutboxWorker,
+	defineDuration,
+	defineMeterRule,
 	type Factor,
 	fail,
 	type Result,
@@ -29,6 +31,19 @@ const SESSION_TIME_TO_LIVE_MILLISECONDS = 60 * 60 * 1_000;
 const AUDIT_LIMIT = 300;
 const LINK_REQUESTS_PER_WINDOW = 3;
 const LINK_REQUEST_WINDOW_MILLISECONDS = 60 * 1_000;
+
+const definedLinkTimeToLive = defineDuration(LINK_TIME_TO_LIVE_MILLISECONDS);
+const definedLinkRequestRule = defineMeterRule({
+	limit: LINK_REQUESTS_PER_WINDOW,
+	windowMilliseconds: LINK_REQUEST_WINDOW_MILLISECONDS,
+});
+
+if (!definedLinkTimeToLive.ok || !definedLinkRequestRule.ok) {
+	throw new Error("the limits of the playground must be valid");
+}
+
+const linkTimeToLive = definedLinkTimeToLive.value;
+const linkRequestRule = definedLinkRequestRule.value;
 const SECRET_BYTES = 32;
 
 type AuditEntry = {
@@ -180,7 +195,7 @@ export async function createPlayground(): Promise<Playground> {
 				payload: { to: message.email, token: message.token },
 			});
 		},
-		timeToLiveMilliseconds: LINK_TIME_TO_LIVE_MILLISECONDS,
+		timeToLive: linkTimeToLive,
 	});
 	const simulatedProvider: Factor = {
 		id: "simulated-provider",
@@ -358,10 +373,7 @@ export async function createPlayground(): Promise<Playground> {
 									actor: address.address,
 									resource: "email-link.challenge",
 								},
-								{
-									limit: LINK_REQUESTS_PER_WINDOW,
-									windowMilliseconds: LINK_REQUEST_WINDOW_MILLISECONDS,
-								},
+								linkRequestRule,
 							);
 
 				if (allowance !== undefined && !allowance.ok) {

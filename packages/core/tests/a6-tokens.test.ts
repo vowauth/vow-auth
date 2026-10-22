@@ -1,8 +1,10 @@
+import { defineDuration } from "@vow-auth/core";
 import {
 	createTokens,
 	type TokenRecord,
 	type TokenStore,
 } from "@vow-auth/core/internal";
+import { durationOf } from "@vow-auth/store-contracts";
 import fastCheck from "fast-check";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
@@ -42,7 +44,7 @@ test("a token is redeemed once with its payload", async () => {
 	const token = await tokens.issue({
 		purpose: "email-link",
 		payload: { email: "a@example.com" },
-		timeToLiveMilliseconds: 60_000,
+		timeToLive: durationOf(60_000),
 	});
 
 	const first = await tokens.consume(token, "email-link");
@@ -56,7 +58,7 @@ test("a token of one purpose is rejected for another and burned", async () => {
 	const { tokens } = createFixture();
 	const token = await tokens.issue({
 		purpose: "oauth-state",
-		timeToLiveMilliseconds: 60_000,
+		timeToLive: durationOf(60_000),
 	});
 
 	const wrong = await tokens.consume(token, "email-link");
@@ -70,7 +72,7 @@ test("parallel redemption succeeds exactly once", async () => {
 	const { tokens } = createFixture();
 	const token = await tokens.issue({
 		purpose: "email-link",
-		timeToLiveMilliseconds: 60_000,
+		timeToLive: durationOf(60_000),
 	});
 
 	const results = await Promise.all(
@@ -84,7 +86,7 @@ test("an expired token is rejected", async () => {
 	const { tokens } = createFixture();
 	const token = await tokens.issue({
 		purpose: "email-link",
-		timeToLiveMilliseconds: 60_000,
+		timeToLive: durationOf(60_000),
 	});
 
 	vi.advanceTimersByTime(60_000);
@@ -106,7 +108,7 @@ test("a token is still valid one millisecond before expiry", async () => {
 	const { tokens } = createFixture();
 	const token = await tokens.issue({
 		purpose: "email-link",
-		timeToLiveMilliseconds: 60_000,
+		timeToLive: durationOf(60_000),
 	});
 
 	vi.advanceTimersByTime(59_999);
@@ -118,11 +120,11 @@ test("every rejection reports the same error", async () => {
 	const { tokens } = createFixture();
 	const wrongPurpose = await tokens.issue({
 		purpose: "oauth-state",
-		timeToLiveMilliseconds: 60_000,
+		timeToLive: durationOf(60_000),
 	});
 	const expired = await tokens.issue({
 		purpose: "email-link",
-		timeToLiveMilliseconds: 1,
+		timeToLive: durationOf(1),
 	});
 	vi.advanceTimersByTime(1);
 
@@ -150,19 +152,23 @@ test("malformed tokens never reach the store", async () => {
 	expect(take).not.toHaveBeenCalled();
 });
 
-test("a non-positive or non-finite time to live is a programming error", async () => {
+test("A26: a time to live the core cannot use is refused where it is defined, and a look-alike is refused where it is used", async () => {
 	const { tokens } = createFixture();
 
-	for (const timeToLiveMilliseconds of [
-		Number.NaN,
-		0,
-		-1,
-		Number.POSITIVE_INFINITY,
-	]) {
-		await expect(
-			tokens.issue({ purpose: "email-link", timeToLiveMilliseconds }),
-		).rejects.toThrow(RangeError);
+	for (const milliseconds of [Number.NaN, 0, -1, Number.POSITIVE_INFINITY]) {
+		expect(defineDuration(milliseconds)).toEqual({
+			ok: false,
+			error: "invalid-request",
+		});
 	}
+
+	await expect(
+		tokens.issue({
+			purpose: "email-link",
+			// @ts-expect-error a look-alike that did not come from defineDuration
+			timeToLive: { milliseconds: 1_000 },
+		}),
+	).rejects.toThrow(TypeError);
 });
 
 test("a record whose expiry the store lost is rejected", async () => {
@@ -184,7 +190,7 @@ test("a record whose expiry the store lost is rejected", async () => {
 	});
 	const token = await tokens.issue({
 		purpose: "email-link",
-		timeToLiveMilliseconds: 60_000,
+		timeToLive: durationOf(60_000),
 	});
 
 	expect((await tokens.consume(token, "email-link")).ok).toBe(false);
@@ -200,7 +206,7 @@ test("inherited properties never replace missing options", async () => {
 		const { tokens } = createFixture();
 		const token = await tokens.issue({
 			purpose: "email-link",
-			timeToLiveMilliseconds: 60_000,
+			timeToLive: durationOf(60_000),
 		});
 		const result = await tokens.consume(token, "email-link");
 

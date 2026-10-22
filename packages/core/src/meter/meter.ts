@@ -8,6 +8,7 @@ import {
 } from "../audit.js";
 import { ERROR_CODES } from "../errors.js";
 import { fail, type Result, succeed } from "../result.js";
+import { createMintRegistry } from "../shared/mint-registry.js";
 import type {
 	MeterReading,
 	MeterStore,
@@ -21,21 +22,57 @@ export type MeterScope = {
 	readonly resource: string;
 };
 
-/** At most `limit` units per window of `windowMilliseconds`. */
+const METER_RULE = Symbol("meter-rule");
+
+/**
+ * At most `limit` units per window of `windowMilliseconds`. Only
+ * `defineMeterRule` creates one, so a rule the meter accepts has been checked
+ * and can never make a request throw.
+ */
 export type MeterRule = {
 	readonly limit: number;
 	readonly windowMilliseconds: number;
+	readonly [METER_RULE]: true;
+};
+
+const meterRules = createMintRegistry<MeterRule>();
+
+const isPositiveInteger = (value: number): boolean => {
+	return Number.isSafeInteger(value) && value > 0;
 };
 
 /**
- * Why a request was refused: over the limit, with the moment to ask again, or
- * (only through a remote client) because the service could not be reached.
+ * Checks a limit and a window and wraps them as a `MeterRule`. It never
+ * throws: a limit or window that is not a positive integer is refused with
+ * `invalid-request`. Define a rule once, where the application starts, and
+ * handle the refusal there.
+ */
+export const defineMeterRule = (input: {
+	readonly limit: number;
+	readonly windowMilliseconds: number;
+}): Result<MeterRule> => {
+	const { limit, windowMilliseconds } = input;
+
+	if (!isPositiveInteger(limit) || !isPositiveInteger(windowMilliseconds)) {
+		return fail(ERROR_CODES.invalidRequest);
+	}
+
+	return succeed(
+		meterRules.mint({ limit, windowMilliseconds, [METER_RULE]: true }),
+	);
+};
+
+/**
+ * Why a request was refused: over the limit, with the moment to ask again; a
+ * rule or cost that is not valid; or (only through a remote client) because
+ * the service could not be reached.
  */
 export type MeterRefusal =
 	| {
 			readonly code: typeof ERROR_CODES.rateLimited;
 			readonly resetsAtMilliseconds: number;
 	  }
+	| { readonly code: typeof ERROR_CODES.invalidRequest }
 	| { readonly code: typeof ERROR_CODES.unavailable };
 
 /** What `observe` saw: the reading, and whether `consume` would have refused. */
@@ -61,7 +98,7 @@ export type Meter = {
 		scope: MeterScope,
 		rule: MeterRule,
 		cost?: number,
-	): Promise<MeterObservation>;
+	): Promise<Result<MeterObservation, MeterRefusal>>;
 };
 
 /** Options for creating the meter. */
@@ -74,18 +111,15 @@ const keyOf = (scope: MeterScope): string => {
 	return `{${encodeURIComponent(scope.tenant)}}:meter:${encodeURIComponent(scope.resource)}:${encodeURIComponent(scope.actor)}`;
 };
 
-const isPositiveInteger = (value: number): boolean => {
-	return Number.isSafeInteger(value) && value > 0;
-};
-
 /**
  * Creates the meter. Requests are counted in a sliding window, as in
  * Cloudflare's rate limiting: the rate is the count of the current interval
  * plus the count of the previous one, weighted by how much of it still falls
- * into the last `windowMilliseconds`. The caller owns the numbers: a rule
- * whose limit or window is not a positive integer, or a cost that is not a
- * positive whole number within the limit, is a programming error and throws.
- * A refused request counts nothing; it is refused with the earliest moment it
+ * into the last `windowMilliseconds`. The rule is checked when it is
+ * defined (`defineMeterRule`), so only the cost is checked per call: a cost
+ * that is not a positive whole number within the limit, or a rule that did not
+ * come from `defineMeterRule`, is refused with `invalid-request` and counts
+ * nothing. A refused request counts nothing; it is refused with the earliest moment it
  * would pass and recorded in the audit, with the reason `capacity` when the
  * store had no room for the key; requests within the limit are not recorded,
  * they are the hot path. If the store fails, so does the call: nothing is let
@@ -98,28 +132,23 @@ export function createMeter(options: MeterOptions): Meter {
 		scope: MeterScope,
 		rule: MeterRule,
 		cost: number,
-	): Promise<MeterStoreResult> => {
+	): Promise<Result<MeterStoreResult, MeterRefusal>> => {
 		if (
-			!isPositiveInteger(rule.limit) ||
-			!isPositiveInteger(rule.windowMilliseconds)
+			!meterRules.has(rule) ||
+			!isPositiveInteger(cost) ||
+			cost > rule.limit
 		) {
-			throw new RangeError(
-				"limit and windowMilliseconds must be positive integers",
-			);
+			return fail({ code: ERROR_CODES.invalidRequest });
 		}
 
-		if (!isPositiveInteger(cost) || cost > rule.limit) {
-			throw new RangeError(
-				"cost must be a positive integer, at most the limit",
-			);
-		}
-
-		return store.consume({
-			key: keyOf(scope),
-			cost,
-			limit: rule.limit,
-			windowMilliseconds: rule.windowMilliseconds,
-		});
+		return succeed(
+			await store.consume({
+				key: keyOf(scope),
+				cost,
+				limit: rule.limit,
+				windowMilliseconds: rule.windowMilliseconds,
+			}),
+		);
 	};
 
 	const record = (
@@ -147,7 +176,13 @@ export function createMeter(options: MeterOptions): Meter {
 
 	return {
 		async consume(scope, rule, cost = 1) {
-			const answer = await decide(scope, rule, cost);
+			const decided = await decide(scope, rule, cost);
+
+			if (!decided.ok) {
+				return fail(decided.error);
+			}
+
+			const answer = decided.value;
 
 			if (!answer.allowed) {
 				await record(AUDIT_OUTCOMES.refusal, scope, rule, answer);
@@ -165,18 +200,24 @@ export function createMeter(options: MeterOptions): Meter {
 			});
 		},
 		async observe(scope, rule, cost = 1) {
-			const answer = await decide(scope, rule, cost);
+			const decided = await decide(scope, rule, cost);
+
+			if (!decided.ok) {
+				return fail(decided.error);
+			}
+
+			const answer = decided.value;
 
 			if (!answer.allowed) {
 				await record(AUDIT_OUTCOMES.observation, scope, rule, answer);
 			}
 
-			return {
+			return succeed({
 				wouldRefuse: !answer.allowed,
 				used: answer.used,
 				remaining: answer.remaining,
 				resetsAtMilliseconds: answer.resetsAtMilliseconds,
-			};
+			});
 		},
 	};
 }

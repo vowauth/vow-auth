@@ -12,6 +12,7 @@ import {
 	type Factor,
 	succeed,
 } from "@vow-auth/core";
+import { durationOf, meterRuleOf } from "@vow-auth/store-contracts";
 import { expect, test } from "vitest";
 
 const LIFE_TIME = 60_000;
@@ -64,7 +65,7 @@ test("one sink reaches every part of the core", async () => {
 
 	const link = await auth.tokens.issue({
 		purpose: "email-link",
-		timeToLiveMilliseconds: 1_000,
+		timeToLive: durationOf(1_000),
 	});
 
 	await auth.tokens.consume(link, "email-link");
@@ -83,11 +84,11 @@ test("one sink reaches every part of the core", async () => {
 
 	await auth.meter.consume(
 		{ tenant: "acme", actor: "alice", resource: "email-link" },
-		{ limit: 1, windowMilliseconds: 1_000 },
+		meterRuleOf({ limit: 1, windowMilliseconds: 1_000 }),
 	);
 	await auth.meter.consume(
 		{ tenant: "acme", actor: "alice", resource: "email-link" },
-		{ limit: 1, windowMilliseconds: 1_000 },
+		meterRuleOf({ limit: 1, windowMilliseconds: 1_000 }),
 	);
 	await auth.sessions.verify("1.garbage");
 	await auth.sessions.revoke({ tenant: "acme", scope: "tenant" });
@@ -116,7 +117,7 @@ test("a failing sink stops every part that grants something", async () => {
 	);
 
 	await expect(
-		auth.tokens.issue({ purpose: "p", timeToLiveMilliseconds: 1_000 }),
+		auth.tokens.issue({ purpose: "p", timeToLive: durationOf(1_000) }),
 	).rejects.toThrow("the audit store is down");
 	await expect(
 		auth.signIn({

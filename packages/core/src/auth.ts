@@ -71,6 +71,14 @@ export function createAuth(options: AuthOptions): Auth {
 		);
 	}
 
+	if (
+		options.sessionTimeToLiveMilliseconds > options.maximumLifeTimeMilliseconds
+	) {
+		throw new RangeError(
+			"sessionTimeToLiveMilliseconds must be at most maximumLifeTimeMilliseconds",
+		);
+	}
+
 	const sealer = createSealer({ secrets: options.secrets, audit });
 	const tokens = createTokens({ store: options.tokenStore, audit });
 	const meter = createMeter({ store: options.meterStore, audit });

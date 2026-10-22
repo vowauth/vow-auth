@@ -5,6 +5,7 @@ import {
 	evaluatePolicy,
 	issueSession,
 } from "@vow-auth/core/internal";
+import { durationOf } from "@vow-auth/store-contracts";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createConnection, sleep } from "./resp-connection.js";
 
@@ -109,7 +110,7 @@ describe.runIf(redisUrl !== undefined)("on a live Redis", () => {
 				? await sessionTokens.issue(session.value, {
 						tenant,
 						device: "laptop",
-						timeToLiveMilliseconds: 60_000,
+						timeToLive: durationOf(60_000),
 					})
 				: undefined;
 

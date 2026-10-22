@@ -5,6 +5,7 @@ import {
 	type TokenRecord,
 	type TokenStore,
 } from "@vow-auth/core/internal";
+import { durationOf } from "@vow-auth/store-contracts";
 import fastCheck from "fast-check";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
@@ -40,7 +41,7 @@ test("changing the payload after issue does not change the stored token", async 
 	const token = await tokens.issue({
 		purpose: "email-link",
 		payload,
-		timeToLiveMilliseconds: 60_000,
+		timeToLive: durationOf(60_000),
 	});
 
 	payload.email = "attacker@example.com";

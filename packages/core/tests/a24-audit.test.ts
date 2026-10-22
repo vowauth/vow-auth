@@ -19,6 +19,7 @@ import {
 	succeed,
 	verifyProof,
 } from "@vow-auth/core/internal";
+import { durationOf } from "@vow-auth/store-contracts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 beforeEach(() => {
@@ -198,7 +199,7 @@ test("a token refusal is generic to the caller and exact in the audit", async ()
 		audit: sink,
 	});
 	const issue = (purpose: string, timeToLiveMilliseconds = 1_000) =>
-		tokens.issue({ purpose, timeToLiveMilliseconds });
+		tokens.issue({ purpose, timeToLive: durationOf(timeToLiveMilliseconds) });
 
 	const ok = await issue("email-link");
 	const wrong = await issue("oauth-state");
@@ -240,7 +241,7 @@ test("session tokens record issue, refusals with their reason, and revocation", 
 	const issued = await sessionTokens.issue(session, {
 		tenant: "acme",
 		device: "laptop",
-		timeToLiveMilliseconds: LIFE_TIME,
+		timeToLive: durationOf(LIFE_TIME),
 	});
 
 	if (!issued.ok) {
@@ -255,7 +256,7 @@ test("session tokens record issue, refusals with their reason, and revocation", 
 		await sealer.seal({
 			purpose: "session",
 			payload: { chain: "[]", expiresAtMilliseconds: "9999999" },
-			timeToLiveMilliseconds: LIFE_TIME,
+			timeToLive: durationOf(LIFE_TIME),
 		}),
 	);
 	await sessionTokens.revoke({
@@ -303,7 +304,7 @@ test("an expired session token is told apart from a forged one when the sealer r
 	const issued = await sessionTokens.issue(await bornSession("alice"), {
 		tenant: "acme",
 		device: "laptop",
-		timeToLiveMilliseconds: 1_000,
+		timeToLive: durationOf(1_000),
 	});
 
 	if (!issued.ok) {
@@ -359,7 +360,7 @@ test("no record carries a secret", async () => {
 	const link = await tokens.issue({
 		purpose: "email-link",
 		payload: { email: "alice@example.com" },
-		timeToLiveMilliseconds: 1_000,
+		timeToLive: durationOf(1_000),
 	});
 
 	await tokens.consume(link, "email-link");
@@ -367,7 +368,7 @@ test("no record carries a secret", async () => {
 	const issued = await sessionTokens.issue(await bornSession("alice"), {
 		tenant: "acme",
 		device: "laptop",
-		timeToLiveMilliseconds: LIFE_TIME,
+		timeToLive: durationOf(LIFE_TIME),
 	});
 
 	if (!issued.ok) {
@@ -452,7 +453,7 @@ test("a failing sink prevents a link, a token and a session token", async () => 
 	const tokens = createTokens({ store: tokenStore, audit: failingSink });
 
 	await expect(
-		tokens.issue({ purpose: "email-link", timeToLiveMilliseconds: 1_000 }),
+		tokens.issue({ purpose: "email-link", timeToLive: durationOf(1_000) }),
 	).rejects.toThrow("the audit store is down");
 
 	const { sessionTokens } = createSessions(failingSink);
@@ -461,7 +462,7 @@ test("a failing sink prevents a link, a token and a session token", async () => 
 		sessionTokens.issue(await bornSession("alice"), {
 			tenant: "acme",
 			device: "laptop",
-			timeToLiveMilliseconds: LIFE_TIME,
+			timeToLive: durationOf(LIFE_TIME),
 		}),
 	).rejects.toThrow("the audit store is down");
 });
@@ -471,7 +472,7 @@ test("a failing sink gives no payload for a redemption and the token stays spent
 	const issuing = createTokens({ store });
 	const token = await issuing.issue({
 		purpose: "email-link",
-		timeToLiveMilliseconds: 1_000,
+		timeToLive: durationOf(1_000),
 	});
 
 	await expect(
@@ -497,7 +498,7 @@ test("a failing sink never blocks a revocation, and the caller still learns of i
 	const issued = await quiet.issue(await bornSession("alice"), {
 		tenant: "acme",
 		device: "laptop",
-		timeToLiveMilliseconds: LIFE_TIME,
+		timeToLive: durationOf(LIFE_TIME),
 	});
 
 	if (!issued.ok) {

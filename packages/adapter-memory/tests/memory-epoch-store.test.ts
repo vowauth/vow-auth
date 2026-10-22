@@ -8,6 +8,7 @@ import {
 	type RevocationLevel,
 	type SessionTokens,
 } from "@vow-auth/core/internal";
+import { durationOf } from "@vow-auth/store-contracts";
 import fastCheck from "fast-check";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
@@ -48,7 +49,7 @@ const issueFor = async (
 	const token = await sessionTokens.issue(session.value, {
 		tenant: "acme",
 		device,
-		timeToLiveMilliseconds,
+		timeToLive: durationOf(timeToLiveMilliseconds),
 	});
 
 	if (!token.ok) {
@@ -151,7 +152,7 @@ test("revocations within one millisecond stay revoked through an overflow", asyn
 	const issued = await sessionTokens.issue(session.value, {
 		tenant: "acme",
 		device: "laptop",
-		timeToLiveMilliseconds: MAXIMUM_LIFE_TIME,
+		timeToLive: durationOf(MAXIMUM_LIFE_TIME),
 	});
 	const token = issued.ok ? issued.value : "";
 	expect(await isValid(sessionTokens, token)).toBe(true);

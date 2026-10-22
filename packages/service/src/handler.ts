@@ -1,4 +1,5 @@
 import {
+	defineMeterRule,
 	ERROR_CODES,
 	type Factor,
 	fail,
@@ -147,9 +148,13 @@ const parseRule = (raw: unknown): MeterRule | undefined => {
 	const limit = field(raw, "limit");
 	const windowMilliseconds = field(raw, "windowMilliseconds");
 
-	return isFiniteNumber(limit) && isFiniteNumber(windowMilliseconds)
-		? { limit, windowMilliseconds }
-		: undefined;
+	if (!isFiniteNumber(limit) || !isFiniteNumber(windowMilliseconds)) {
+		return undefined;
+	}
+
+	const defined = defineMeterRule({ limit, windowMilliseconds });
+
+	return defined.ok ? defined.value : undefined;
 };
 
 const parseLevel = (raw: unknown): RevocationLevel | undefined => {
@@ -318,10 +323,7 @@ export function createAuthHandler(options: AuthHandlerOptions): AuthHandler {
 					return undefined;
 				}
 
-				return respond(200, {
-					ok: true,
-					value: await auth.meter.observe(scope, rule, cost),
-				});
+				return respond(200, await auth.meter.observe(scope, rule, cost));
 			},
 		],
 		[
@@ -377,10 +379,8 @@ export function createAuthHandler(options: AuthHandlerOptions): AuthHandler {
 
 		try {
 			return (await route(body)) ?? problem(400, "Bad Request");
-		} catch (error) {
-			return error instanceof RangeError
-				? problem(400, "Bad Request")
-				: problem(500, "Internal Server Error");
+		} catch {
+			return problem(500, "Internal Server Error");
 		}
 	};
 }

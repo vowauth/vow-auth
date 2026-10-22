@@ -8,6 +8,7 @@ import {
 	type Session,
 	type SessionTokens,
 } from "@vow-auth/core/internal";
+import { durationOf } from "@vow-auth/store-contracts";
 import fastCheck from "fast-check";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
@@ -90,7 +91,7 @@ const issueToken = async (
 	const result = await sessionTokens.issue(session, {
 		tenant,
 		device,
-		timeToLiveMilliseconds,
+		timeToLive: durationOf(timeToLiveMilliseconds),
 	});
 
 	if (!result.ok) {
@@ -242,7 +243,7 @@ test("a sealed session of an unknown chain shape is rejected", async () => {
 				chain: JSON.stringify(chain),
 				expiresAtMilliseconds: String(Date.now() + MAXIMUM_LIFE_TIME),
 			},
-			timeToLiveMilliseconds: MAXIMUM_LIFE_TIME,
+			timeToLive: durationOf(MAXIMUM_LIFE_TIME),
 		});
 	};
 
@@ -275,7 +276,7 @@ test("only a session born from an allow decision gets a token", async () => {
 			await sessionTokens.issue(forged, {
 				tenant: "acme",
 				device: "laptop",
-				timeToLiveMilliseconds: MAXIMUM_LIFE_TIME,
+				timeToLive: durationOf(MAXIMUM_LIFE_TIME),
 			}),
 		).toEqual({ ok: false, error: "no-session" });
 	}
@@ -288,7 +289,7 @@ test("anything but a session token is rejected with one error", async () => {
 	}).seal({
 		purpose: "oauth-state",
 		payload: { chain: "[]" },
-		timeToLiveMilliseconds: MAXIMUM_LIFE_TIME,
+		timeToLive: durationOf(MAXIMUM_LIFE_TIME),
 	});
 
 	await fastCheck.assert(
@@ -323,20 +324,21 @@ test("lifetimes beyond the configured maximum are a programming error", async ()
 		).toThrow(RangeError);
 	}
 
-	for (const timeToLiveMilliseconds of [
-		0,
-		-1,
-		Number.NaN,
-		MAXIMUM_LIFE_TIME + 1,
-	]) {
-		await expect(
-			sessionTokens.issue(session, {
-				tenant: "acme",
-				device: "laptop",
-				timeToLiveMilliseconds,
-			}),
-		).rejects.toThrow(RangeError);
-	}
+	expect(
+		await sessionTokens.issue(session, {
+			tenant: "acme",
+			device: "laptop",
+			timeToLive: durationOf(MAXIMUM_LIFE_TIME + 1),
+		}),
+	).toEqual({ ok: false, error: "invalid-request" });
+	expect(
+		await sessionTokens.issue(session, {
+			tenant: "acme",
+			device: "laptop",
+			// @ts-expect-error a look-alike that did not come from defineDuration
+			timeToLive: { milliseconds: 1_000 },
+		}),
+	).toEqual({ ok: false, error: "invalid-request" });
 });
 
 test("an epoch store that breaks its contract fails loudly, never open", async () => {
@@ -355,7 +357,7 @@ test("an epoch store that breaks its contract fails loudly, never open", async (
 		sessionTokens.issue(await bornSession("alice"), {
 			tenant: "acme",
 			device: "laptop",
-			timeToLiveMilliseconds: MAXIMUM_LIFE_TIME,
+			timeToLive: durationOf(MAXIMUM_LIFE_TIME),
 		}),
 	).rejects.toThrow("EpochStore.read");
 });

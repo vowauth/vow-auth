@@ -1,5 +1,6 @@
 import type { AuditSink } from "./audit.js";
 import { evaluatePolicy } from "./decision.js";
+import { defineDuration } from "./duration.js";
 import { ERROR_CODES } from "./errors.js";
 import type { IdentityStore } from "./identity/identity-store.js";
 import type { MutateIdentity } from "./identity/mutate-identity.js";
@@ -72,6 +73,13 @@ export function createSignIn(options: SignInOptions): SignIn {
 		sessionTimeToLiveMilliseconds,
 		audit,
 	} = options;
+	const sessionTimeToLive = defineDuration(sessionTimeToLiveMilliseconds);
+
+	if (!sessionTimeToLive.ok) {
+		throw new RangeError(
+			"sessionTimeToLiveMilliseconds must be a positive finite number",
+		);
+	}
 
 	return async (request) => {
 		const { tenant, device } = request;
@@ -128,7 +136,7 @@ export function createSignIn(options: SignInOptions): SignIn {
 		const token = await sessionTokens.issue(session.value, {
 			tenant,
 			device,
-			timeToLiveMilliseconds: sessionTimeToLiveMilliseconds,
+			timeToLive: sessionTimeToLive.value,
 		});
 
 		if (!token.ok) {

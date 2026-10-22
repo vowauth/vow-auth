@@ -264,6 +264,10 @@ export function createAuthClient(options: AuthClientOptions): ServiceSurface {
 		const code = field(error, "code");
 		const resetsAtMilliseconds = field(error, "resetsAtMilliseconds");
 
+		if (code === ERROR_CODES.invalidRequest) {
+			return { code };
+		}
+
 		return code === ERROR_CODES.rateLimited &&
 			isFiniteNumber(resetsAtMilliseconds)
 			? { code, resetsAtMilliseconds }
@@ -335,24 +339,14 @@ export function createAuthClient(options: AuthClientOptions): ServiceSurface {
 					{ code: ERROR_CODES.unavailable },
 				);
 			},
-			observe: async (scope: MeterScope, rule: MeterRule, cost?: number) => {
-				const answer = await callWithoutResult(SERVICE_ROUTES.meterObserve, {
-					scope,
-					rule,
-					cost,
-				});
-				const observation =
-					field(answer.body, "ok") === true
-						? parseObservation(field(answer.body, "value"))
-						: undefined;
-
-				if (observation === undefined) {
-					note("malformed");
-
-					throw unavailableError("malformed");
-				}
-
-				return observation;
+			observe: (scope: MeterScope, rule: MeterRule, cost?: number) => {
+				return ask<MeterObservation, MeterRefusal>(
+					SERVICE_ROUTES.meterObserve,
+					{ scope, rule, cost },
+					parseObservation,
+					parseRefusal,
+					{ code: ERROR_CODES.unavailable },
+				);
 			},
 		},
 		mutateIdentity: (

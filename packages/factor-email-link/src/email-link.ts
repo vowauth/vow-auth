@@ -1,5 +1,6 @@
 import {
 	canonicalizeEmail,
+	type Duration,
 	EMAIL_PROVIDER,
 	ERROR_CODES,
 	type Factor,
@@ -26,7 +27,8 @@ export type EmailLinkOptions = {
 	 * `challenge`.
 	 */
 	readonly deliver: (message: EmailLinkMessage) => Promise<void>;
-	readonly timeToLiveMilliseconds: number;
+	/** How long a link stays valid; create it with `defineDuration`. */
+	readonly timeToLive: Duration;
 };
 
 /** A passwordless sign-in by a link sent to an email address. */
@@ -91,7 +93,7 @@ export function createEmailLink(options: EmailLinkOptions): EmailLink {
 			const token = await options.tokens.issue({
 				purpose: EMAIL_LINK_PURPOSE,
 				payload: { email: canonical.address },
-				timeToLiveMilliseconds: options.timeToLiveMilliseconds,
+				timeToLive: options.timeToLive,
 			});
 
 			await options.deliver({ email: canonical.address, token });

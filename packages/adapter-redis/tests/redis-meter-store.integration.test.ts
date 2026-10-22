@@ -1,6 +1,7 @@
 import { createRedisMeterStore } from "@vow-auth/adapter-redis";
 import { slidingWindow } from "@vow-auth/core";
 import { createMeter } from "@vow-auth/core/internal";
+import { meterRuleOf } from "@vow-auth/store-contracts";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createConnection, sleep } from "./resp-connection.js";
 
@@ -290,7 +291,7 @@ describe.runIf(redisUrl !== undefined)("the meter on a live Redis", () => {
 
 	test("the core meter over Redis keeps scopes apart", async () => {
 		const meter = createMeter({ store: store() });
-		const rule = { limit: 1, windowMilliseconds: MINUTE };
+		const rule = meterRuleOf({ limit: 1, windowMilliseconds: MINUTE });
 		const scope = { tenant, actor: "alice", resource: "email-link" };
 
 		expect((await meter.consume(scope, rule)).ok).toBe(true);

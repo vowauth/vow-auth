@@ -13,6 +13,7 @@ import {
 	type Factor,
 	succeed,
 } from "@vow-auth/core";
+import { durationOf } from "@vow-auth/store-contracts";
 import { expect, test } from "vitest";
 
 const LIFE_TIME = 60_000;
@@ -58,6 +59,8 @@ test("A21, A25: the public surface is exactly this, so a new export or a weakeni
 		"createOutboundGuard",
 		"createOutboxWorker",
 		"createRedirectPolicy",
+		"defineDuration",
+		"defineMeterRule",
 		"fail",
 		"isPublicAddress",
 		"isStoreFullError",
@@ -123,7 +126,7 @@ test("A23: the core never changes what it is given", async () => {
 		deepFreeze({
 			purpose: "email-link",
 			payload: { email: "alice@example.com" },
-			timeToLiveMilliseconds: 1_000,
+			timeToLive: durationOf(1_000),
 		}),
 	);
 
@@ -133,7 +136,7 @@ test("A23: the core never changes what it is given", async () => {
 		deepFreeze({
 			purpose: "oauth-state",
 			payload: { state: "abc" },
-			timeToLiveMilliseconds: 1_000,
+			timeToLive: durationOf(1_000),
 		}),
 	);
 

@@ -6,6 +6,7 @@ import {
 	type AuditSink,
 	report,
 } from "../audit.js";
+import { type Duration, isDuration } from "../duration.js";
 import { ERROR_CODES } from "../errors.js";
 import { fail, type Result, succeed } from "../result.js";
 import { SECRET_LENGTH } from "../shared/constants.js";
@@ -24,7 +25,7 @@ export type TokensOptions = {
 export type IssueTokenInput = {
 	readonly purpose: string;
 	readonly payload?: Readonly<Record<string, string>>;
-	readonly timeToLiveMilliseconds: number;
+	readonly timeToLive: Duration;
 };
 
 /** One-time secrets bound to a purpose. */
@@ -80,13 +81,8 @@ export function createTokens(options: TokensOptions): Tokens {
 
 	return {
 		async issue(input) {
-			if (
-				!Number.isFinite(input.timeToLiveMilliseconds) ||
-				input.timeToLiveMilliseconds <= 0
-			) {
-				throw new RangeError(
-					"timeToLiveMilliseconds must be a positive finite number",
-				);
+			if (!isDuration(input.timeToLive)) {
+				throw new TypeError("timeToLive must come from defineDuration");
 			}
 
 			const token = generateSecret();
@@ -95,7 +91,7 @@ export function createTokens(options: TokensOptions): Tokens {
 				await options.store.put(await hashSecret(token), {
 					purpose: input.purpose,
 					payload: own(input, "payload") ?? {},
-					expiresAtMilliseconds: Date.now() + input.timeToLiveMilliseconds,
+					expiresAtMilliseconds: Date.now() + input.timeToLive.milliseconds,
 				});
 			} catch (error) {
 				if (isStoreFullError(error)) {

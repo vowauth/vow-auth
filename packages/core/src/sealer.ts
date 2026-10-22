@@ -5,6 +5,7 @@ import {
 	type AuditSink,
 	report,
 } from "./audit.js";
+import { type Duration, isDuration } from "./duration.js";
 import { ERROR_CODES } from "./errors.js";
 import { fail, type Result, succeed } from "./result.js";
 import { isPlainObject } from "./shared/is-plain-object.js";
@@ -33,7 +34,7 @@ export type SealerOptions = {
 export type SealInput = {
 	readonly purpose: string;
 	readonly payload?: Readonly<Record<string, string>>;
-	readonly timeToLiveMilliseconds: number;
+	readonly timeToLive: Duration;
 };
 
 /**
@@ -269,13 +270,8 @@ export function createSealer(options: SealerOptions): Sealer {
 
 	return {
 		async seal(input) {
-			if (
-				!Number.isFinite(input.timeToLiveMilliseconds) ||
-				input.timeToLiveMilliseconds <= 0
-			) {
-				throw new RangeError(
-					"timeToLiveMilliseconds must be a positive finite number",
-				);
+			if (!isDuration(input.timeToLive)) {
+				throw new TypeError("timeToLive must come from defineDuration");
 			}
 
 			const salt = randomBytes(SALT_BYTES);
@@ -283,7 +279,7 @@ export function createSealer(options: SealerOptions): Sealer {
 
 			const contents: SealedContents = {
 				payload: own(input, "payload") ?? {},
-				expiresAtMilliseconds: Date.now() + input.timeToLiveMilliseconds,
+				expiresAtMilliseconds: Date.now() + input.timeToLive.milliseconds,
 			};
 
 			const ciphertext = await crypto.subtle.encrypt(

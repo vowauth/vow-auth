@@ -3,6 +3,7 @@ import {
 	isUnavailableError,
 	type UnavailableReason,
 } from "@vow-auth/service";
+import { meterRuleOf } from "@vow-auth/store-contracts";
 import fastCheck from "fast-check";
 import { expect, test, vi } from "vitest";
 import { BASE_URL, claimsFactor, SERVICE_TOKEN } from "./support.js";
@@ -39,7 +40,7 @@ const claims = {
 	emailVerified: true,
 };
 const scope = { tenant: "acme", actor: "alice", resource: "email-link" };
-const rule = { limit: 1, windowMilliseconds: 1_000 };
+const rule = meterRuleOf({ limit: 1, windowMilliseconds: 1_000 });
 
 const everyOperation = async (client: ReturnType<typeof clientWith>) => {
 	const refusals = [
@@ -52,12 +53,12 @@ const everyOperation = async (client: ReturnType<typeof clientWith>) => {
 		await client.sessions.verify("token"),
 		await client.meter.consume(scope, rule),
 		await client.mutateIdentity("acme", "subject", { type: "delete" }),
+		await client.meter.observe(scope, rule),
 	];
 	const thrown = [];
 
 	for (const call of [
 		() => client.sessions.revoke({ tenant: "acme", scope: "tenant" }),
-		() => client.meter.observe(scope, rule),
 	]) {
 		try {
 			await call();
@@ -114,7 +115,7 @@ test.each(failures)(
 		expect(refusals[1]).toEqual({ ok: false, error: "unavailable" });
 		expect(refusals[2]).toEqual({ ok: false, error: { code: "unavailable" } });
 		expect(refusals[3]).toEqual({ ok: false, error: "unavailable" });
-		expect(thrown[1]).toBe(true);
+		expect(refusals[4]).toEqual({ ok: false, error: { code: "unavailable" } });
 
 		if (!_name.startsWith("a success")) {
 			expect(thrown[0]).toBe(true);
@@ -138,7 +139,7 @@ test("A28: a call that outlasts the timeout is refused", async () => {
 	);
 
 	expect(refusals.every((result) => !result.ok)).toBe(true);
-	expect(thrown).toEqual([true, true]);
+	expect(thrown).toEqual([true]);
 	expect(new Set(reasons)).toEqual(new Set(["timeout"]));
 });
 

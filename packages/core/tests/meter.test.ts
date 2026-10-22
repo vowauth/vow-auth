@@ -1,6 +1,8 @@
 import { createMemoryMeterStore } from "@vow-auth/adapter-memory";
 import type { AuditRecord, AuditSink, MeterStore } from "@vow-auth/core";
+import { defineMeterRule } from "@vow-auth/core";
 import { createMeter } from "@vow-auth/core/internal";
+import { meterRuleOf } from "@vow-auth/store-contracts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 beforeEach(() => {
@@ -12,7 +14,7 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
-const RULE = { limit: 3, windowMilliseconds: 1_000 };
+const RULE = meterRuleOf({ limit: 3, windowMilliseconds: 1_000 });
 const SCOPE = { tenant: "acme", actor: "alice", resource: "email-link" };
 
 const createFixture = (audit?: AuditSink) => {
@@ -114,7 +116,7 @@ test("a cost is counted whole, and a cost that does not fit counts nothing", asy
 
 test("counters of different tenants, resources and actors never mix", async () => {
 	const { meter } = createFixture();
-	const rule = { limit: 1, windowMilliseconds: 1_000 };
+	const rule = meterRuleOf({ limit: 1, windowMilliseconds: 1_000 });
 
 	await meter.consume(SCOPE, rule);
 
@@ -135,7 +137,7 @@ test("counters of different tenants, resources and actors never mix", async () =
 
 test("parallel requests are counted exactly once each", async () => {
 	const { meter } = createFixture();
-	const rule = { limit: 10, windowMilliseconds: 1_000 };
+	const rule = meterRuleOf({ limit: 10, windowMilliseconds: 1_000 });
 
 	const results = await Promise.all(
 		Array.from({ length: 50 }, () => meter.consume(SCOPE, rule)),
@@ -144,23 +146,48 @@ test("parallel requests are counted exactly once each", async () => {
 	expect(results.filter((result) => result.ok)).toHaveLength(10);
 });
 
-test("a rule or a cost the types allow but the meter cannot count is a programming error", async () => {
-	const { meter } = createFixture();
-
-	for (const rule of [
+test("A26: a rule the meter cannot count is refused where it is defined, never when a request comes", async () => {
+	for (const input of [
 		{ limit: 0, windowMilliseconds: 1_000 },
 		{ limit: 1.5, windowMilliseconds: 1_000 },
 		{ limit: 1, windowMilliseconds: 1.5 },
 		{ limit: Number.NaN, windowMilliseconds: 1_000 },
 		{ limit: 1, windowMilliseconds: 0 },
 		{ limit: 1, windowMilliseconds: Number.POSITIVE_INFINITY },
+		{ limit: Number.MAX_SAFE_INTEGER + 1, windowMilliseconds: 1_000 },
 	]) {
-		await expect(meter.consume(SCOPE, rule)).rejects.toThrow(RangeError);
+		expect(defineMeterRule(input), JSON.stringify(input)).toEqual({
+			ok: false,
+			error: "invalid-request",
+		});
 	}
+});
+
+test("A26: a cost the meter cannot count, or a look-alike rule, is a refusal that counts nothing", async () => {
+	const { meter } = createFixture();
+	const refused = { ok: false, error: { code: "invalid-request" } };
 
 	for (const cost of [0, -1, 1.5, Number.NaN, 4]) {
-		await expect(meter.consume(SCOPE, RULE, cost)).rejects.toThrow(RangeError);
+		expect(await meter.consume(SCOPE, RULE, cost), String(cost)).toEqual(
+			refused,
+		);
+		expect(await meter.observe(SCOPE, RULE, cost), String(cost)).toEqual(
+			refused,
+		);
 	}
+
+	const lookAlike = { limit: 1, windowMilliseconds: 1_000 };
+
+	// @ts-expect-error a look-alike that did not come from defineMeterRule
+	expect(await meter.consume(SCOPE, lookAlike)).toEqual(refused);
+	// @ts-expect-error a look-alike that did not come from defineMeterRule
+	expect(await meter.observe(SCOPE, lookAlike)).toEqual(refused);
+
+	expect((await meter.consume(SCOPE, RULE)).ok).toBe(true);
+	expect(await meter.observe(SCOPE, RULE, 1)).toMatchObject({
+		ok: true,
+		value: { used: 2 },
+	});
 });
 
 test("a refusal is recorded, a request within the limit is not", async () => {
@@ -211,7 +238,7 @@ test("a failing store fails the call, it never lets the request through", async 
 test("a store that is full refuses new keys and keeps counting the old ones", async () => {
 	const store = createMemoryMeterStore({ maximumBytes: 700 });
 	const meter = createMeter({ store });
-	const rule = { limit: 2, windowMilliseconds: 1_000 };
+	const rule = meterRuleOf({ limit: 2, windowMilliseconds: 1_000 });
 	const scopes = ["a", "b", "c"].map((actor) => ({ ...SCOPE, actor }));
 	const first = [];
 

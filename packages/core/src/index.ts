@@ -15,6 +15,7 @@ export {
 	type Decision,
 	type DenyReason,
 } from "./decision.js";
+export { type Duration, defineDuration } from "./duration.js";
 export { ERROR_CODES } from "./errors.js";
 export {
 	type CanonicalEmail,
@@ -32,12 +33,13 @@ export {
 	type Resolution,
 	type ResolutionOutcome,
 } from "./identity/resolve-identity.js";
-export type {
-	Meter,
-	MeterObservation,
-	MeterRefusal,
-	MeterRule,
-	MeterScope,
+export {
+	defineMeterRule,
+	type Meter,
+	type MeterObservation,
+	type MeterRefusal,
+	type MeterRule,
+	type MeterScope,
 } from "./meter/meter.js";
 export type {
 	MeterConsumeInput,
