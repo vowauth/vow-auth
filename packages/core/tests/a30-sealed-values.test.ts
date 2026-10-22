@@ -1,6 +1,6 @@
 import { defineDuration } from "@vow-auth/core";
 import { createSealer, type SecretVersion } from "@vow-auth/core/internal";
-import { durationOf } from "@vow-auth/store-contracts";
+import { durationOf } from "@vow-auth/test-support";
 import fastCheck from "fast-check";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 

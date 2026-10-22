@@ -15,7 +15,6 @@ export {
 	outboxStoreContract,
 } from "./outbox-store-contract.js";
 export type { StoreClock } from "./store-clock.js";
-export { durationOf, meterRuleOf } from "./test-values.js";
 export {
 	type TokenStoreContractOptions,
 	type TokenStoreOverflowPolicy,

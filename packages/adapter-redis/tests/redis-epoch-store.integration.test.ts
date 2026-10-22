@@ -5,7 +5,7 @@ import {
 	evaluatePolicy,
 	issueSession,
 } from "@vow-auth/core/internal";
-import { durationOf } from "@vow-auth/store-contracts";
+import { durationOf } from "@vow-auth/test-support";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createConnection, sleep } from "./resp-connection.js";
 

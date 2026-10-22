@@ -21,6 +21,7 @@
 	},
 	"devDependencies": {
 		"@vow-auth/core": "workspace:*",
-		"@vow-auth/store-contracts": "workspace:*"
+		"@vow-auth/store-contracts": "workspace:*",
+		"@vow-auth/test-support": "workspace:*"
 	}
 }

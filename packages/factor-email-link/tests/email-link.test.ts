@@ -19,7 +19,7 @@ import {
 	createEmailLink,
 	type EmailLinkMessage,
 } from "@vow-auth/factor-email-link";
-import { durationOf } from "@vow-auth/store-contracts";
+import { durationOf } from "@vow-auth/test-support";
 import { expect, test } from "vitest";
 
 const FIFTEEN_MINUTES = 15 * 60 * 1_000;

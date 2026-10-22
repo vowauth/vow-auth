@@ -16,7 +16,7 @@ import {
 	type SignInPolicyInput,
 	succeed,
 } from "@vow-auth/core/internal";
-import { durationOf } from "@vow-auth/store-contracts";
+import { durationOf } from "@vow-auth/test-support";
 import { expect, test, vi } from "vitest";
 
 const LIFE_TIME = 60_000;

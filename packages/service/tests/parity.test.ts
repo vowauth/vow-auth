@@ -1,4 +1,4 @@
-import { durationOf, meterRuleOf } from "@vow-auth/store-contracts";
+import { durationOf, meterRuleOf } from "@vow-auth/test-support";
 import { describe, expect, test } from "vitest";
 import {
 	claimsFactor,

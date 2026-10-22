@@ -2,7 +2,7 @@ import { createMemoryMeterStore } from "@vow-auth/adapter-memory";
 import type { AuditRecord, AuditSink, MeterStore } from "@vow-auth/core";
 import { defineMeterRule } from "@vow-auth/core";
 import { createMeter } from "@vow-auth/core/internal";
-import { meterRuleOf } from "@vow-auth/store-contracts";
+import { meterRuleOf } from "@vow-auth/test-support";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 beforeEach(() => {

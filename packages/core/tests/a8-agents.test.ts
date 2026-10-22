@@ -13,7 +13,7 @@ import {
 	succeed,
 } from "@vow-auth/core";
 import { createSealer } from "@vow-auth/core/internal";
-import { durationOf } from "@vow-auth/store-contracts";
+import { durationOf } from "@vow-auth/test-support";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 const MINUTE = 60_000;

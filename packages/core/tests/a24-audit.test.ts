@@ -19,7 +19,7 @@ import {
 	succeed,
 	verifyProof,
 } from "@vow-auth/core/internal";
-import { durationOf } from "@vow-auth/store-contracts";
+import { durationOf } from "@vow-auth/test-support";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 beforeEach(() => {

@@ -12,7 +12,7 @@ import {
 	type Factor,
 	succeed,
 } from "@vow-auth/core";
-import { durationOf, meterRuleOf } from "@vow-auth/store-contracts";
+import { durationOf, meterRuleOf } from "@vow-auth/test-support";
 import { expect, test } from "vitest";
 
 const LIFE_TIME = 60_000;

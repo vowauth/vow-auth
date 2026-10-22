@@ -8,7 +8,7 @@ import {
 	isStoreFullError,
 } from "@vow-auth/core";
 import { createMeter, createTokens } from "@vow-auth/core/internal";
-import { durationOf, meterRuleOf } from "@vow-auth/store-contracts";
+import { durationOf, meterRuleOf } from "@vow-auth/test-support";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 beforeEach(() => {

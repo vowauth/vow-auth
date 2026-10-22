@@ -1,7 +1,7 @@
 import { createRedisMeterStore } from "@vow-auth/adapter-redis";
 import { slidingWindow } from "@vow-auth/core";
 import { createMeter } from "@vow-auth/core/internal";
-import { meterRuleOf } from "@vow-auth/store-contracts";
+import { meterRuleOf } from "@vow-auth/test-support";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createConnection, sleep } from "./resp-connection.js";
 

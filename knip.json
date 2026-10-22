@@ -12,6 +12,7 @@
 			"entry": ["src/server.ts", "tests/**/*.test.ts"]
 		},
 		"packages/store-contracts": {},
+		"packages/test-support": {},
 		"packages/doctor": {
 			"entry": ["tests/**/*.test.ts", "tests/fixtures/*.ts"]
 		}

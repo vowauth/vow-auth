@@ -3,7 +3,7 @@ import {
 	isUnavailableError,
 	type UnavailableReason,
 } from "@vow-auth/service";
-import { meterRuleOf } from "@vow-auth/store-contracts";
+import { meterRuleOf } from "@vow-auth/test-support";
 import fastCheck from "fast-check";
 import { expect, test, vi } from "vitest";
 import { BASE_URL, claimsFactor, SERVICE_TOKEN } from "./support.js";

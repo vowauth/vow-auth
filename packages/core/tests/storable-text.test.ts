@@ -13,7 +13,7 @@ import {
 	type IdentityStore,
 	succeed,
 } from "@vow-auth/core";
-import { durationOf } from "@vow-auth/store-contracts";
+import { durationOf } from "@vow-auth/test-support";
 import fastCheck from "fast-check";
 import { expect, test } from "vitest";
 

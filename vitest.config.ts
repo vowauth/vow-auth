@@ -22,6 +22,9 @@ export default defineConfig({
 			"@vow-auth/service": fileURLToPath(
 				new URL("./packages/service/src/index.ts", import.meta.url),
 			),
+			"@vow-auth/test-support": fileURLToPath(
+				new URL("./packages/test-support/src/index.ts", import.meta.url),
+			),
 			"@vow-auth/store-contracts": fileURLToPath(
 				new URL("./packages/store-contracts/src/index.ts", import.meta.url),
 			),
