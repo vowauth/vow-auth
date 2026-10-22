@@ -36,6 +36,15 @@ export {
 	type ResolutionOutcome,
 } from "./identity/resolve-identity.js";
 export {
+	applyLimit,
+	assertLimit,
+	createLimiter,
+	type Limit,
+	type Limiter,
+	type LimiterOptions,
+	NO_LIMIT,
+} from "./meter/limiter.js";
+export {
 	defineMeterRule,
 	type Meter,
 	type MeterObservation,

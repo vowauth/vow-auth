@@ -11,6 +11,7 @@
 			"@vow-auth/adapter-postgres": [
 				"./packages/adapter-postgres/src/index.ts"
 			],
+			"@vow-auth/http": ["./packages/http/src/index.ts"],
 			"@vow-auth/service": ["./packages/service/src/index.ts"],
 			"@vow-auth/test-support": ["./packages/test-support/src/index.ts"],
 			"@vow-auth/store-contracts": ["./packages/store-contracts/src/index.ts"],

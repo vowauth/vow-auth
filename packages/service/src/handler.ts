@@ -1,9 +1,12 @@
 import {
+	applyLimit,
+	assertLimit,
 	defineDuration,
 	defineMeterRule,
 	ERROR_CODES,
 	type Factor,
 	fail,
+	type Limit,
 	type MeterRule,
 	type MeterScope,
 	type RevocationLevel,
@@ -26,6 +29,16 @@ export type AuthHandlerOptions = {
 	readonly serviceTokens: readonly string[];
 	/** The largest request body in bytes; a larger one is refused with 413. */
 	readonly maximumBodyBytes: number;
+	/**
+	 * How often a sign in may be tried through the service. The answer is
+	 * required: a limiter made with `createLimiter`, whose scopes can use the
+	 * request and the tenant, or `"off"` when the caller limits it already. A
+	 * refused sign in answers `{ ok: false, error: "rate-limited" }`.
+	 */
+	readonly signInLimit: Limit<{
+		readonly request: Request;
+		readonly tenant: string;
+	}>;
 };
 
 /** Answers one request of the service. */
@@ -200,7 +213,10 @@ const parseLevel = (raw: unknown): RevocationLevel | undefined => {
  * answer is `Cache-Control: no-store`, because it can carry a token.
  */
 export function createAuthHandler(options: AuthHandlerOptions): AuthHandler {
-	const { auth, factors, serviceTokens, maximumBodyBytes } = options;
+	const { auth, factors, serviceTokens, maximumBodyBytes, signInLimit } =
+		options;
+
+	assertLimit("signInLimit", signInLimit);
 
 	if (
 		serviceTokens.length === 0 ||
@@ -234,11 +250,14 @@ export function createAuthHandler(options: AuthHandlerOptions): AuthHandler {
 
 	const routes = new Map<
 		string,
-		(body: Record<string, unknown>) => Promise<Response | undefined>
+		(
+			body: Record<string, unknown>,
+			request: Request,
+		) => Promise<Response | undefined>
 	>([
 		[
 			SERVICE_ROUTES.signIn,
-			async (body) => {
+			async (body, request) => {
 				const tenant = field(body, "tenant");
 				const device = field(body, "device");
 				const factorId = field(body, "factor");
@@ -263,6 +282,11 @@ export function createAuthHandler(options: AuthHandlerOptions): AuthHandler {
 				const factor = Object.hasOwn(factors, factorId)
 					? factors[factorId]
 					: undefined;
+				const allowed = await applyLimit(signInLimit, { request, tenant });
+
+				if (!allowed.ok) {
+					return respond(200, fail(allowed.error.code));
+				}
 
 				return respond(
 					200,
@@ -439,7 +463,7 @@ export function createAuthHandler(options: AuthHandlerOptions): AuthHandler {
 		}
 
 		try {
-			return (await route(body)) ?? problem(400, "Bad Request");
+			return (await route(body, request)) ?? problem(400, "Bad Request");
 		} catch {
 			return problem(500, "Internal Server Error");
 		}

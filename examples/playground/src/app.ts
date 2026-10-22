@@ -275,6 +275,7 @@ export async function createPlayground(): Promise<Playground> {
 			});
 		},
 		timeToLive: linkTimeToLive,
+		limit: "off",
 	});
 	const simulatedProvider: Factor = {
 		id: "simulated-provider",
@@ -547,7 +548,11 @@ export async function createPlayground(): Promise<Playground> {
 				await record(
 					"app.challenge",
 					result.ok ? AUDIT_OUTCOMES.success : AUDIT_OUTCOMES.refusal,
-					result.ok ? "sent" : result.error,
+					result.ok
+						? "sent"
+						: typeof result.error === "string"
+							? result.error
+							: result.error.code,
 					tenant,
 					"",
 					{ email },

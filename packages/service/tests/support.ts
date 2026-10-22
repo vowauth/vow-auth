@@ -74,6 +74,7 @@ export const createHandler = (auth: Auth): AuthHandler => {
 		},
 		serviceTokens: [SERVICE_TOKEN],
 		maximumBodyBytes: 10_000,
+		signInLimit: "off",
 	});
 };
 

@@ -77,6 +77,7 @@ test("every secret of the list works, so a secret can be rotated", async () => {
 		factors: {},
 		serviceTokens: [SERVICE_TOKEN, `${SERVICE_TOKEN}-next`],
 		maximumBodyBytes: 1_000,
+		signInLimit: "off",
 	});
 
 	for (const token of [SERVICE_TOKEN, `${SERVICE_TOKEN}-next`]) {
@@ -350,6 +351,7 @@ test("an unexpected failure is a 500 that says nothing about its cause", async (
 		factors: { [claimsFactor.id]: claimsFactor },
 		serviceTokens: [SERVICE_TOKEN],
 		maximumBodyBytes: 1_000,
+		signInLimit: "off",
 	});
 	const response = await failing(post("/v1/sessions/verify", { token: "x" }));
 	const text = await response.text();
@@ -361,11 +363,12 @@ test("an unexpected failure is a 500 that says nothing about its cause", async (
 
 test("a handler needs secrets it can use and a body limit", () => {
 	const { auth } = createCore();
-	const base = {
+	const base: Parameters<typeof createAuthHandler>[0] = {
 		auth,
 		factors: {},
 		serviceTokens: [SERVICE_TOKEN],
 		maximumBodyBytes: 1_000,
+		signInLimit: "off",
 	};
 
 	for (const broken of [
@@ -378,4 +381,61 @@ test("a handler needs secrets it can use and a body limit", () => {
 	]) {
 		expect(() => createAuthHandler({ ...base, ...broken })).toThrow(RangeError);
 	}
+});
+
+test("A27: a sign in through the service can be limited, and the refusal is an ordinary answer", async () => {
+	const { auth } = createCore();
+	const calls: string[] = [];
+	const limited = createAuthHandler({
+		auth,
+		factors: { [claimsFactor.id]: claimsFactor },
+		serviceTokens: [SERVICE_TOKEN],
+		maximumBodyBytes: 10_000,
+		signInLimit: async ({ tenant }) => {
+			calls.push(tenant);
+
+			return calls.length > 1
+				? {
+						ok: false,
+						error: { code: "rate-limited", resetsAtMilliseconds: 1 },
+					}
+				: { ok: true, value: undefined };
+		},
+	});
+	const attempt = () =>
+		limited(
+			post("/v1/sign-in", {
+				tenant: "acme",
+				device: "d",
+				factor: "claims",
+				response: {
+					provider: "p",
+					externalId: "e",
+					emailVerified: false,
+				},
+			}),
+		);
+
+	expect((await (await attempt()).json()).ok).toBe(true);
+
+	const refused = await attempt();
+
+	expect(refused.status).toBe(200);
+	expect(await refused.json()).toEqual({ ok: false, error: "rate-limited" });
+	expect(calls).toEqual(["acme", "acme"]);
+});
+
+test("a forgotten sign in limit stops the start", () => {
+	const { auth } = createCore();
+
+	expect(() =>
+		createAuthHandler({
+			auth,
+			factors: {},
+			serviceTokens: [SERVICE_TOKEN],
+			maximumBodyBytes: 1_000,
+			// @ts-expect-error the limit is required
+			signInLimit: undefined,
+		}),
+	).toThrow(/signInLimit must be a limiter/);
 });

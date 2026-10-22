@@ -280,6 +280,18 @@ importers:
         specifier: workspace:*
         version: link:../core
 
+  packages/http:
+    devDependencies:
+      '@vow-auth/adapter-memory':
+        specifier: workspace:*
+        version: link:../adapter-memory
+      '@vow-auth/core':
+        specifier: workspace:*
+        version: link:../core
+      '@vow-auth/test-support':
+        specifier: workspace:*
+        version: link:../test-support
+
   packages/service:
     devDependencies:
       '@vow-auth/adapter-memory':

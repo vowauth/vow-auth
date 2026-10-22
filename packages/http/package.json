@@ -1,0 +1,27 @@
+{
+	"name": "@vow-auth/http",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"license": "MIT",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"build": "tsc -p tsconfig.json"
+	},
+	"peerDependencies": {
+		"@vow-auth/core": "workspace:*"
+	},
+	"devDependencies": {
+		"@vow-auth/adapter-memory": "workspace:*",
+		"@vow-auth/core": "workspace:*",
+		"@vow-auth/test-support": "workspace:*"
+	}
+}

@@ -1322,6 +1322,407 @@ window.FLOW_DATA = {
 			]
 		},
 		{
+			"id": "http-cookie",
+			"group": "Вход",
+			"title": "HTTP: браузер (cookie)",
+			"summary": "Обработчик для страниц в браузере. Токен сессии живёт только в cookie, которую не читает скрипт, и не попадает в тело ответа. Чужой сайт не может отправить запрос, заголовок Authorization не читается вовсе.",
+			"nodes": [
+				{
+					"id": "start",
+					"kind": "start",
+					"title": "POST /sign-in/<фактор>",
+					"fn": "createCookieHandler",
+					"input": "Request (JSON, Origin, Sec-Fetch-Site, cookie)",
+					"output": "Response",
+					"source": {
+						"file": "packages/http/src/cookie-handler.ts",
+						"line": 64
+					}
+				},
+				{
+					"id": "route",
+					"kind": "decision",
+					"title": "Путь и метод известны?",
+					"fn": "route",
+					"text": "Закрытая таблица маршрутов. Неизвестный путь: 404, не тот метод: 405 с Allow.",
+					"source": {
+						"file": "packages/http/src/handler.ts",
+						"line": 398
+					}
+				},
+				{
+					"id": "route-bad",
+					"kind": "end-fail",
+					"title": "404 или 405",
+					"codes": [
+						"404",
+						"405"
+					]
+				},
+				{
+					"id": "origin",
+					"kind": "decision",
+					"title": "Запрос с нашей страницы?",
+					"fn": "checkOrigin",
+					"text": "Сначала Fetch Metadata (cross-site и none отказ), затем весь Origin (схема, хост, порт) точно по списку; Origin null никогда. Без Origin берётся Referer, а без обоих только same-origin.",
+					"source": {
+						"file": "packages/http/src/origin.ts",
+						"line": 34
+					}
+				},
+				{
+					"id": "origin-bad",
+					"kind": "end-fail",
+					"title": "403 forbidden",
+					"codes": [
+						"forbidden"
+					]
+				},
+				{
+					"id": "json",
+					"kind": "decision",
+					"title": "Тело: JSON-объект в пределе?",
+					"fn": "readBody",
+					"text": "Content-Type только application/json (форма с чужого сайта не пройдёт без предпроверки), предел читается по потоку, а не по заголовку.",
+					"source": {
+						"file": "packages/http/src/handler.ts",
+						"line": 143
+					}
+				},
+				{
+					"id": "json-bad",
+					"kind": "end-fail",
+					"title": "400, 413 или 415",
+					"codes": [
+						"400",
+						"413",
+						"415"
+					]
+				},
+				{
+					"id": "limit",
+					"kind": "decision",
+					"title": "Лимит попыток",
+					"fn": "applyLimit",
+					"text": "limit обязателен: лимитер или явное off. Забытое значение останавливает создание обработчика.",
+					"source": {
+						"file": "packages/http/src/handler.ts",
+						"line": 275
+					}
+				},
+				{
+					"id": "limit-bad",
+					"kind": "end-fail",
+					"title": "429 и Retry-After",
+					"codes": [
+						"rate-limited"
+					]
+				},
+				{
+					"id": "device",
+					"kind": "step",
+					"title": "Устройство браузера",
+					"fn": "deviceFor",
+					"text": "Запечатанная cookie __Host-vow-device (случайный id, цель device). Подделанная или чужая печать не доверяется, выдаётся новое устройство.",
+					"source": {
+						"file": "packages/http/src/cookie-handler.ts",
+						"line": 121
+					}
+				},
+				{
+					"id": "sign-in",
+					"kind": "jump",
+					"title": "auth.signIn",
+					"text": "Дальше путь входа ядра.",
+					"jump": {
+						"flow": "sign-in",
+						"node": "start"
+					}
+				},
+				{
+					"id": "refused",
+					"kind": "end-fail",
+					"title": "Отказ или step-up",
+					"text": "Один общий код на операцию; требование второго фактора возвращает continuation, cookie сессии не ставится."
+				},
+				{
+					"id": "cookie",
+					"kind": "end-ok",
+					"title": "200 и Set-Cookie",
+					"fn": "signedIn",
+					"text": "HttpOnly, Secure, __Host-, Path=/, без Domain, явный SameSite (Lax по умолчанию, Strict по выбору). Токена в теле нет.",
+					"source": {
+						"file": "packages/http/src/cookie-handler.ts",
+						"line": 137
+					}
+				}
+			],
+			"edges": [
+				{
+					"from": "start",
+					"to": "route",
+					"label": "",
+					"kind": "ok"
+				},
+				{
+					"from": "route",
+					"to": "route-bad",
+					"label": "нет",
+					"kind": "fail"
+				},
+				{
+					"from": "route",
+					"to": "origin",
+					"label": "да",
+					"kind": "ok"
+				},
+				{
+					"from": "origin",
+					"to": "origin-bad",
+					"label": "нет",
+					"kind": "fail"
+				},
+				{
+					"from": "origin",
+					"to": "json",
+					"label": "да",
+					"kind": "ok"
+				},
+				{
+					"from": "json",
+					"to": "json-bad",
+					"label": "нет",
+					"kind": "fail"
+				},
+				{
+					"from": "json",
+					"to": "limit",
+					"label": "да",
+					"kind": "ok"
+				},
+				{
+					"from": "limit",
+					"to": "limit-bad",
+					"label": "выше предела",
+					"kind": "fail"
+				},
+				{
+					"from": "limit",
+					"to": "device",
+					"label": "в пределах или off",
+					"kind": "ok"
+				},
+				{
+					"from": "device",
+					"to": "sign-in",
+					"label": "",
+					"kind": "ok"
+				},
+				{
+					"from": "sign-in",
+					"to": "refused",
+					"label": "отказ",
+					"kind": "fail"
+				},
+				{
+					"from": "sign-in",
+					"to": "cookie",
+					"label": "вход",
+					"kind": "ok"
+				}
+			]
+		},
+		{
+			"id": "http-bearer",
+			"group": "Вход",
+			"title": "HTTP: приложение или сервер (Bearer)",
+			"summary": "Обработчик для клиентов, которые носят токен сами. Токен приходит в теле, cookie не ставятся и не читаются, поэтому браузер нельзя заставить говорить от имени человека. Для страниц в браузере есть CORS по точному списку.",
+			"nodes": [
+				{
+					"id": "start",
+					"kind": "start",
+					"title": "POST /sign-in/<фактор>",
+					"fn": "createBearerHandler",
+					"input": "Request (JSON, device, Authorization)",
+					"output": "Response",
+					"source": {
+						"file": "packages/http/src/bearer-handler.ts",
+						"line": 36
+					}
+				},
+				{
+					"id": "preflight",
+					"kind": "decision",
+					"title": "Предпроверка браузера (OPTIONS)?",
+					"fn": "preflight",
+					"text": "Отвечает только источникам из allowedOrigins, точно по значению, без звёздочки и без credentials.",
+					"source": {
+						"file": "packages/http/src/bearer-handler.ts",
+						"line": 49
+					}
+				},
+				{
+					"id": "preflight-bad",
+					"kind": "end-fail",
+					"title": "403 без CORS-заголовков",
+					"codes": [
+						"forbidden"
+					]
+				},
+				{
+					"id": "json",
+					"kind": "decision",
+					"title": "Тело: JSON-объект в пределе?",
+					"fn": "readBody",
+					"source": {
+						"file": "packages/http/src/handler.ts",
+						"line": 143
+					}
+				},
+				{
+					"id": "json-bad",
+					"kind": "end-fail",
+					"title": "400, 413 или 415",
+					"codes": [
+						"400",
+						"413",
+						"415"
+					]
+				},
+				{
+					"id": "limit",
+					"kind": "decision",
+					"title": "Лимит попыток",
+					"fn": "applyLimit",
+					"source": {
+						"file": "packages/http/src/handler.ts",
+						"line": 275
+					}
+				},
+				{
+					"id": "limit-bad",
+					"kind": "end-fail",
+					"title": "429 и Retry-After",
+					"codes": [
+						"rate-limited"
+					]
+				},
+				{
+					"id": "device",
+					"kind": "decision",
+					"title": "device: случайная строка не короче 16 знаков?",
+					"fn": "deviceFor",
+					"text": "Имя вроде phone отвергается: от device зависит, что завершит выход с устройства.",
+					"source": {
+						"file": "packages/http/src/bearer-handler.ts",
+						"line": 78
+					}
+				},
+				{
+					"id": "device-bad",
+					"kind": "end-fail",
+					"title": "400 invalid-request",
+					"codes": [
+						"invalid-request"
+					]
+				},
+				{
+					"id": "sign-in",
+					"kind": "jump",
+					"title": "auth.signIn",
+					"text": "Дальше путь входа ядра.",
+					"jump": {
+						"flow": "sign-in",
+						"node": "start"
+					}
+				},
+				{
+					"id": "refused",
+					"kind": "end-fail",
+					"title": "Отказ или step-up"
+				},
+				{
+					"id": "token",
+					"kind": "end-ok",
+					"title": "200 и токен в теле",
+					"fn": "signedIn",
+					"text": "Set-Cookie нет. Дальше клиент шлёт Authorization: Bearer <токен>; токен в адресе не читается.",
+					"source": {
+						"file": "packages/http/src/bearer-handler.ts",
+						"line": 86
+					}
+				}
+			],
+			"edges": [
+				{
+					"from": "start",
+					"to": "preflight",
+					"label": "",
+					"kind": "ok"
+				},
+				{
+					"from": "preflight",
+					"to": "preflight-bad",
+					"label": "источника нет в списке",
+					"kind": "fail"
+				},
+				{
+					"from": "preflight",
+					"to": "json",
+					"label": "не OPTIONS",
+					"kind": "ok"
+				},
+				{
+					"from": "json",
+					"to": "json-bad",
+					"label": "нет",
+					"kind": "fail"
+				},
+				{
+					"from": "json",
+					"to": "limit",
+					"label": "да",
+					"kind": "ok"
+				},
+				{
+					"from": "limit",
+					"to": "limit-bad",
+					"label": "выше предела",
+					"kind": "fail"
+				},
+				{
+					"from": "limit",
+					"to": "device",
+					"label": "в пределах или off",
+					"kind": "ok"
+				},
+				{
+					"from": "device",
+					"to": "device-bad",
+					"label": "нет",
+					"kind": "fail"
+				},
+				{
+					"from": "device",
+					"to": "sign-in",
+					"label": "да",
+					"kind": "ok"
+				},
+				{
+					"from": "sign-in",
+					"to": "refused",
+					"label": "отказ",
+					"kind": "fail"
+				},
+				{
+					"from": "sign-in",
+					"to": "token",
+					"label": "вход",
+					"kind": "ok"
+				}
+			]
+		},
+		{
 			"id": "session-verify",
 			"group": "Сессии и агенты",
 			"title": "Проверка сессии",
@@ -2428,7 +2829,7 @@ window.FLOW_DATA = {
 					"text": "Приложение обычно ставит перед ним счётчик (meter) по адресу.",
 					"source": {
 						"file": "packages/factor-email-link/src/email-link.ts",
-						"line": 86
+						"line": 99
 					}
 				},
 				{
@@ -2485,7 +2886,7 @@ window.FLOW_DATA = {
 					"text": "Вызывается из verifyProof при входе. response это токен из ссылки.",
 					"source": {
 						"file": "packages/factor-email-link/src/email-link.ts",
-						"line": 56
+						"line": 69
 					}
 				},
 				{
@@ -3532,7 +3933,7 @@ window.FLOW_DATA = {
 					"output": "Response",
 					"source": {
 						"file": "packages/service/src/handler.ts",
-						"line": 202
+						"line": 215
 					}
 				},
 				{
@@ -3543,7 +3944,7 @@ window.FLOW_DATA = {
 					"text": "Authorization: Bearer. Сравниваются SHA-256 дайджесты, всегда со всеми секретами (время не зависит от того, какой подошёл), так что секрет можно ротировать списком.",
 					"source": {
 						"file": "packages/service/src/handler.ts",
-						"line": 44
+						"line": 57
 					}
 				},
 				{
@@ -3582,7 +3983,7 @@ window.FLOW_DATA = {
 					"text": "Объявленная длина и поток считаются отдельно: заниженный Content-Length не поможет.",
 					"source": {
 						"file": "packages/service/src/handler.ts",
-						"line": 78
+						"line": 91
 					}
 				},
 				{

@@ -1,10 +1,14 @@
 import {
+	applyLimit,
+	assertLimit,
 	canonicalizeEmail,
 	type Duration,
 	EMAIL_PROVIDER,
 	ERROR_CODES,
 	type Factor,
 	fail,
+	type Limit,
+	type MeterRefusal,
 	type Result,
 	succeed,
 	type Tokens,
@@ -29,6 +33,13 @@ export type EmailLinkOptions = {
 	readonly deliver: (message: EmailLinkMessage) => Promise<void>;
 	/** How long a link stays valid; create it with `defineDuration`. */
 	readonly timeToLive: Duration;
+	/**
+	 * How often a link may be sent to one address. Asking for a link costs
+	 * nothing for an anonymous caller and reaches a stranger's mailbox, so the
+	 * answer is required: a limiter made with `createLimiter`, or `"off"`
+	 * when the caller limits it already.
+	 */
+	readonly limit: Limit<{ readonly email: string }>;
 };
 
 /** A passwordless sign-in by a link sent to an email address. */
@@ -39,7 +50,7 @@ export type EmailLink = {
 	 * Sends a link to the address. The answer does not depend on whether the
 	 * address belongs to a known subject, so it reveals nothing about accounts.
 	 */
-	challenge(email: string): Promise<Result<undefined>>;
+	challenge(email: string): Promise<Result<undefined, string | MeterRefusal>>;
 };
 
 /**
@@ -49,6 +60,8 @@ export type EmailLink = {
  * creates a session or links an account.
  */
 export function createEmailLink(options: EmailLinkOptions): EmailLink {
+	assertLimit("limit", options.limit);
+
 	return {
 		factor: {
 			id: EMAIL_LINK_PURPOSE,
@@ -88,6 +101,14 @@ export function createEmailLink(options: EmailLinkOptions): EmailLink {
 
 			if (canonical === undefined) {
 				return fail(ERROR_CODES.invalidEmail);
+			}
+
+			const allowed = await applyLimit(options.limit, {
+				email: canonical.address,
+			});
+
+			if (!allowed.ok) {
+				return fail(allowed.error);
 			}
 
 			const token = await options.tokens.issue({

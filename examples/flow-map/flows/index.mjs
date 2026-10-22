@@ -1,6 +1,7 @@
 import { outbox, serviceClient, serviceServer } from "./async-and-service.mjs";
 import { emailLink, identity, sealer, tokens } from "./data.mjs";
 import { GROUPS } from "./dsl.mjs";
+import { httpBearer, httpCookie } from "./http.mjs";
 import { authorizeFlow, meter, transport } from "./protection.mjs";
 import {
 	agentDelegate,
@@ -17,6 +18,8 @@ export const flows = [
 	map,
 	signIn,
 	signInStepUp,
+	httpCookie,
+	httpBearer,
 	sessionVerify,
 	revoke,
 	agentDelegate,

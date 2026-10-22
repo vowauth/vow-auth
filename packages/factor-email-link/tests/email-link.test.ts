@@ -1,11 +1,14 @@
 import {
 	createMemoryEpochStore,
 	createMemoryIdentityStore,
+	createMemoryMeterStore,
 	createMemoryOutboxStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
+import { createLimiter } from "@vow-auth/core";
 import {
 	createEmit,
+	createMeter,
 	createOutboxWorker,
 	createSealer,
 	createSessionTokens,
@@ -19,7 +22,7 @@ import {
 	createEmailLink,
 	type EmailLinkMessage,
 } from "@vow-auth/factor-email-link";
-import { durationOf } from "@vow-auth/test-support";
+import { durationOf, meterRuleOf } from "@vow-auth/test-support";
 import { expect, test } from "vitest";
 
 const FIFTEEN_MINUTES = 15 * 60 * 1_000;
@@ -35,6 +38,7 @@ const createFixture = () => {
 			sent.push(message);
 		},
 		timeToLive: durationOf(FIFTEEN_MINUTES),
+		limit: "off",
 	});
 	const identities = createMemoryIdentityStore();
 	const sessionTokens = createSessionTokens({
@@ -214,6 +218,7 @@ test("a failing delivery reaches the caller", async () => {
 			throw new Error("mail is down");
 		},
 		timeToLive: durationOf(FIFTEEN_MINUTES),
+		limit: "off",
 	});
 
 	await expect(emailLink.challenge("alice@example.com")).rejects.toThrow(
@@ -239,6 +244,7 @@ test("delivery through the outbox keeps the sign-in alive while the mail provide
 			}
 		},
 		timeToLive: durationOf(FIFTEEN_MINUTES),
+		limit: "off",
 	});
 	const sentMails: string[] = [];
 	let providerIsUp = false;
@@ -268,4 +274,82 @@ test("delivery through the outbox keeps the sign-in alive while the mail provide
 
 	const proof = await verifyProof(emailLink.factor, sentMails[0]);
 	expect(proof.ok).toBe(true);
+});
+
+const limitedEmailLink = (
+	limit: Parameters<typeof createEmailLink>[0]["limit"],
+) => {
+	const sent: EmailLinkMessage[] = [];
+	const emailLink = createEmailLink({
+		tokens: createTokens({
+			store: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
+		}),
+		deliver: async (message) => {
+			sent.push(message);
+		},
+		timeToLive: durationOf(FIFTEEN_MINUTES),
+		limit,
+	});
+
+	return { emailLink, sent };
+};
+
+test("links to one address are limited, and spelling variants of it share the count", async () => {
+	const meter = createMeter({
+		store: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
+	});
+	const { emailLink, sent } = limitedEmailLink(
+		createLimiter({
+			meter,
+			rule: meterRuleOf({ limit: 2, windowMilliseconds: 60_000 }),
+			scopes: ({ email }) => [
+				{ tenant: "acme", actor: email, resource: "email-link" },
+			],
+		}),
+	);
+
+	expect((await emailLink.challenge("alice@example.com")).ok).toBe(true);
+	expect((await emailLink.challenge("ALICE@Example.com")).ok).toBe(true);
+	expect(await emailLink.challenge(" alice@EXAMPLE.com ")).toMatchObject({
+		ok: false,
+		error: { code: "rate-limited", resetsAtMilliseconds: expect.any(Number) },
+	});
+	expect(sent).toHaveLength(2);
+	expect((await emailLink.challenge("bob@example.com")).ok).toBe(true);
+});
+
+test("an address that is refused costs no limit and sends nothing", async () => {
+	const meter = createMeter({
+		store: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
+	});
+	const { emailLink, sent } = limitedEmailLink(
+		createLimiter({
+			meter,
+			rule: meterRuleOf({ limit: 1, windowMilliseconds: 60_000 }),
+			scopes: ({ email }) => [
+				{ tenant: "acme", actor: email, resource: "email-link" },
+			],
+		}),
+	);
+
+	for (const address of [
+		"not an address",
+		"a@b@c",
+		"",
+		`a${String.fromCharCode(0)}@example.com`,
+	]) {
+		expect(await emailLink.challenge(address)).toEqual({
+			ok: false,
+			error: "invalid-email",
+		});
+	}
+
+	expect(sent).toEqual([]);
+	expect((await emailLink.challenge("alice@example.com")).ok).toBe(true);
+});
+
+test("a forgotten limit stops the start", () => {
+	// @ts-expect-error the limit is required
+	expect(() => limitedEmailLink(undefined)).toThrow(/limit must be a limiter/);
+	expect(() => limitedEmailLink("off")).not.toThrow();
 });
