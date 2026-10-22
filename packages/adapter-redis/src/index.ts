@@ -1,5 +1,9 @@
 export {
 	createRedisEpochStore,
 	type RedisEpochStoreOptions,
-	type RedisScriptRunner,
 } from "./redis-epoch-store.js";
+export {
+	createRedisMeterStore,
+	type RedisMeterStoreOptions,
+} from "./redis-meter-store.js";
+export type { RedisScriptRunner } from "./redis-script-runner.js";

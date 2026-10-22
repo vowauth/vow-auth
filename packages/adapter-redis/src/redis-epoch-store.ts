@@ -1,27 +1,14 @@
 import type { EpochStore } from "@vow-auth/core";
-
-/**
- * Runs a Lua script on Redis as `EVAL script keys.length ...keys ...args` and
- * returns the raw reply, so the store works with any client.
- *
- * @example
- * ioredis: `(script, keys, args) => redis.eval(script, keys.length, ...keys, ...args)`
- * node-redis: `(script, keys, args) => client.eval(script, { keys: [...keys], arguments: [...args] })`
- * Upstash: `(script, keys, args) => redis.eval(script, [...keys], [...args])`
- */
-export type RedisScriptRunner = (
-	script: string,
-	keys: readonly string[],
-	args: readonly string[],
-) => Promise<unknown>;
+import {
+	type RedisScriptRunner,
+	SERVER_NOW,
+	toNumber,
+} from "./redis-script-runner.js";
 
 /** Options of the Redis epoch store. */
 export type RedisEpochStoreOptions = {
 	readonly run: RedisScriptRunner;
 };
-
-const SERVER_NOW = `local time = redis.call("TIME")
-local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)`;
 
 const READ_SCRIPT = `${SERVER_NOW}
 if #KEYS == 0 then
@@ -34,14 +21,6 @@ local current = tonumber(redis.call("GET", KEYS[1]) or "0") or 0
 local stamp = math.max(current + 1, now)
 redis.call("SET", KEYS[1], string.format("%.0f", stamp), "PX", ARGV[1])
 return stamp`;
-
-const toNumber = (value: unknown): number => {
-	if (typeof value === "number") {
-		return value;
-	}
-
-	return typeof value === "string" ? Number(value) : Number.NaN;
-};
 
 /**
  * Epoch store on Redis 7+, Valkey 7.2+ or Upstash. Every time comes from the
