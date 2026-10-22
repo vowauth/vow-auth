@@ -20,6 +20,7 @@ import {
 	fail,
 	type Result,
 	type RevocationLevel,
+	requireFactor,
 	succeed,
 } from "@vow-auth/core";
 import { createEmailLink } from "@vow-auth/factor-email-link";
@@ -31,6 +32,10 @@ const SESSION_TIME_TO_LIVE_MILLISECONDS = 60 * 60 * 1_000;
 const AUDIT_LIMIT = 300;
 const LINK_REQUESTS_PER_WINDOW = 3;
 const LINK_REQUEST_WINDOW_MILLISECONDS = 60 * 1_000;
+const AUTHENTICATOR_ID = "authenticator";
+const AUTHENTICATOR_CODE = "424242";
+const STEP_UP_TIME_TO_LIVE_MILLISECONDS = 5 * 60 * 1_000;
+const AGENT_TIME_TO_LIVE_MILLISECONDS = 30 * 60 * 1_000;
 
 const definedLinkTimeToLive = defineDuration(LINK_TIME_TO_LIVE_MILLISECONDS);
 const definedLinkRequestRule = defineMeterRule({
@@ -38,9 +43,17 @@ const definedLinkRequestRule = defineMeterRule({
 	windowMilliseconds: LINK_REQUEST_WINDOW_MILLISECONDS,
 });
 
-if (!definedLinkTimeToLive.ok || !definedLinkRequestRule.ok) {
+const definedAgentTimeToLive = defineDuration(AGENT_TIME_TO_LIVE_MILLISECONDS);
+
+if (
+	!definedLinkTimeToLive.ok ||
+	!definedLinkRequestRule.ok ||
+	!definedAgentTimeToLive.ok
+) {
 	throw new Error("the limits of the playground must be valid");
 }
+
+const agentTimeToLive = definedAgentTimeToLive.value;
 
 const linkTimeToLive = definedLinkTimeToLive.value;
 const linkRequestRule = definedLinkRequestRule.value;
@@ -69,6 +82,17 @@ type SubjectView = {
 	readonly tenant: string;
 	readonly emails: readonly string[];
 	readonly banned: boolean;
+	readonly secondFactor: boolean;
+};
+
+type Delegated = {
+	readonly delegation: string;
+	readonly agent: string;
+	readonly subject: string;
+	readonly tenant: string;
+	readonly boundToSession: boolean;
+	readonly canWrite: boolean;
+	readonly token: string;
 };
 
 /** The playground: the whole auth stack on in-memory adapters, behind a Fetch handler. */
@@ -135,6 +159,9 @@ export async function createPlayground(): Promise<Playground> {
 	const mails: Mail[] = [];
 	const subjects = new Map<string, { tenant: string; emails: Set<string> }>();
 	const bannedSubjects = new Set<string>();
+	const secondFactorSubjects = new Set<string>();
+	const delegations = new Map<string, Delegated>();
+	const notes = new Map<string, string[]>();
 
 	const outbox = createMemoryOutboxStore();
 	const emit = createEmit(outbox);
@@ -184,7 +211,17 @@ export async function createPlayground(): Promise<Playground> {
 		secrets: [{ version: 1, value: randomSecret() }],
 		maximumLifeTimeMilliseconds: SESSION_TIME_TO_LIVE_MILLISECONDS,
 		sessionTimeToLiveMilliseconds: SESSION_TIME_TO_LIVE_MILLISECONDS,
-		policy: ({ subject }) => (bannedSubjects.has(subject) ? "deny" : "allow"),
+		stepUpTimeToLiveMilliseconds: STEP_UP_TIME_TO_LIVE_MILLISECONDS,
+		policy: ({ subject, proofs }) => {
+			if (bannedSubjects.has(subject)) {
+				return "deny";
+			}
+
+			return secondFactorSubjects.has(subject) &&
+				!proofs.some((proof) => proof.factor === AUTHENTICATOR_ID)
+				? requireFactor(AUTHENTICATOR_ID)
+				: "allow";
+		},
 		audit,
 	});
 	const emailLink = createEmailLink({
@@ -201,6 +238,30 @@ export async function createPlayground(): Promise<Playground> {
 		id: "simulated-provider",
 		strength: "possession",
 		verify: async (response) => succeed(response),
+	};
+
+	const authenticatorExternalId = (account: string): string | undefined => {
+		const address = canonicalizeEmail(account);
+
+		return address === undefined
+			? undefined
+			: `authenticator:${address.address}`;
+	};
+	const authenticator: Factor = {
+		id: AUTHENTICATOR_ID,
+		strength: "possession",
+		verify: async (response) => {
+			const externalId = authenticatorExternalId(text(response, "account"));
+
+			return externalId !== undefined &&
+				text(response, "code") === AUTHENTICATOR_CODE
+				? succeed({
+						provider: AUTHENTICATOR_ID,
+						externalId,
+						emailVerified: false,
+					})
+				: fail("invalid-proof");
+		},
 	};
 
 	const worker = createOutboxWorker({
@@ -259,13 +320,24 @@ export async function createPlayground(): Promise<Playground> {
 		device: string,
 		factor: Factor,
 		response: unknown,
+		continuation?: string,
 	): Promise<Response> => {
-		const result = await runSignIn({ tenant, device, factor, response });
+		const result = await runSignIn({
+			tenant,
+			device,
+			factor,
+			response,
+			...(continuation === undefined ? {} : { continuation }),
+		});
 
 		if (!result.ok) {
 			return typeof result.error === "string"
 				? respond(statusOf(result.error), { error: result.error })
-				: respond(401, result.error);
+				: respond(401, {
+						error: result.error.code,
+						factor: result.error.factor,
+						continuation: result.error.continuation,
+					});
 		}
 
 		const signedIn = result.value;
@@ -300,6 +372,7 @@ export async function createPlayground(): Promise<Playground> {
 			tenant: subject.tenant,
 			emails: Array.from(subject.emails),
 			banned: bannedSubjects.has(id),
+			secondFactor: secondFactorSubjects.has(id),
 		}));
 	};
 
@@ -311,8 +384,14 @@ export async function createPlayground(): Promise<Playground> {
 			device: string;
 			session: string;
 		},
+		id: string,
 	): Result<RevocationLevel> => {
 		switch (scope) {
+			case "agent":
+			case "delegation":
+				return id === ""
+					? fail("id-required")
+					: succeed({ tenant: verified.tenant, scope, id });
 			case "tenant":
 				return succeed({ tenant: verified.tenant, scope: "tenant" });
 			case "user":
@@ -346,11 +425,23 @@ export async function createPlayground(): Promise<Playground> {
 		}
 
 		if (request.method === "GET" && path === "/api/state") {
+			const agents = await Promise.all(
+				Array.from(delegations.values(), async (delegated) => ({
+					delegation: delegated.delegation,
+					agent: delegated.agent,
+					subject: delegated.subject,
+					boundToSession: delegated.boundToSession,
+					canWrite: delegated.canWrite,
+					alive: (await auth.agents.verify(delegated.token)).ok,
+				})),
+			);
+
 			return respond(200, {
 				settings,
 				audit: auditLog,
 				mails,
 				subjects: subjectViews(),
+				agents,
 				outbox: { pending: outbox.pending(), buried: outbox.buried().length },
 			});
 		}
@@ -419,6 +510,209 @@ export async function createPlayground(): Promise<Playground> {
 					simulatedProvider,
 					parseClaims(text(body, "claims")),
 				);
+			case "/api/sign-in/second-factor":
+				return signIn(
+					text(body, "tenant"),
+					text(body, "device"),
+					authenticator,
+					{ account: text(body, "account"), code: text(body, "code") },
+					text(body, "continuation"),
+				);
+			case "/api/second-factor/enable": {
+				const verified = await auth.sessions.verify(bearerToken(request));
+
+				if (!verified.ok) {
+					return respond(401, { error: verified.error });
+				}
+
+				const enabled = field(body, "enabled") !== false;
+				const known = subjects.get(verified.value.subject);
+				const account =
+					known === undefined ? undefined : Array.from(known.emails)[0];
+				const externalId =
+					account === undefined ? undefined : authenticatorExternalId(account);
+
+				if (!enabled) {
+					secondFactorSubjects.delete(verified.value.subject);
+					await record(
+						"app.second-factor",
+						AUDIT_OUTCOMES.success,
+						"disabled",
+						verified.value.tenant,
+						verified.value.subject,
+						{},
+					);
+
+					return respond(200, { enabled: false });
+				}
+
+				if (account === undefined || externalId === undefined) {
+					return respond(422, { error: "no-email" });
+				}
+
+				await identities.linkIdentity(
+					verified.value.tenant,
+					verified.value.subject,
+					{
+						provider: AUTHENTICATOR_ID,
+						externalId,
+						emailVerified: false,
+					},
+				);
+				secondFactorSubjects.add(verified.value.subject);
+				await record(
+					"app.second-factor",
+					AUDIT_OUTCOMES.success,
+					"enabled",
+					verified.value.tenant,
+					verified.value.subject,
+					{},
+				);
+
+				return respond(200, {
+					enabled: true,
+					account,
+					code: AUTHENTICATOR_CODE,
+				});
+			}
+			case "/api/sensitive": {
+				const verified = await auth.sessions.verify(bearerToken(request));
+
+				if (!verified.ok) {
+					return respond(401, { error: verified.error });
+				}
+
+				const maximumAgeSeconds = Number(field(body, "maxAgeSeconds"));
+				const requiredMethod = text(body, "requireMethod");
+				const ageSeconds = Math.floor(
+					verified.value.authenticationAgeMilliseconds / 1_000,
+				);
+
+				if (
+					requiredMethod !== "" &&
+					!verified.value.methods.includes(requiredMethod)
+				) {
+					return respond(403, {
+						error: "step-up-required",
+						needs: requiredMethod,
+						methods: verified.value.methods,
+					});
+				}
+
+				if (
+					Number.isFinite(maximumAgeSeconds) &&
+					ageSeconds > maximumAgeSeconds
+				) {
+					return respond(401, {
+						error: "recent-sign-in-required",
+						ageSeconds,
+						maxAgeSeconds: maximumAgeSeconds,
+					});
+				}
+
+				return respond(200, {
+					ok: true,
+					methods: verified.value.methods,
+					ageSeconds,
+				});
+			}
+			case "/api/notes": {
+				const verified = await auth.sessions.verify(bearerToken(request));
+
+				if (!verified.ok) {
+					return respond(401, { error: verified.error });
+				}
+
+				const list = notes.get(verified.value.subject) ?? [];
+
+				if (text(body, "action") === "write") {
+					list.push(`person: ${text(body, "text")}`);
+					notes.set(verified.value.subject, list);
+				}
+
+				return respond(200, { actingAs: "person", notes: list });
+			}
+			case "/api/agents/delegate": {
+				const verified = await auth.sessions.verify(bearerToken(request));
+
+				if (!verified.ok) {
+					return respond(401, { error: verified.error });
+				}
+
+				const agent = text(body, "agent");
+				const boundToSession = field(body, "boundToSession") === true;
+				const canWrite = field(body, "canWrite") === true;
+				const delegated = await auth.agents.delegate(bearerToken(request), {
+					agent,
+					timeToLive: agentTimeToLive,
+					boundToSession,
+				});
+
+				if (!delegated.ok) {
+					return respond(422, { error: delegated.error });
+				}
+
+				delegations.set(delegated.value.delegation, {
+					delegation: delegated.value.delegation,
+					agent,
+					subject: verified.value.subject,
+					tenant: verified.value.tenant,
+					boundToSession,
+					canWrite,
+					token: delegated.value.token,
+				});
+
+				return respond(200, {
+					token: delegated.value.token,
+					delegation: delegated.value.delegation,
+					agent,
+					boundToSession,
+					canWrite,
+					subject: verified.value.subject,
+				});
+			}
+			case "/api/agents/act": {
+				const verified = await auth.agents.verify(bearerToken(request));
+
+				if (!verified.ok) {
+					return respond(401, { error: verified.error });
+				}
+
+				const rights = delegations.get(verified.value.delegation);
+				const action = text(body, "action");
+
+				if (action === "write" && rights?.canWrite !== true) {
+					await record(
+						"app.agent-act",
+						AUDIT_OUTCOMES.refusal,
+						"forbidden",
+						verified.value.tenant,
+						verified.value.subject,
+						{ agent: verified.value.agent, action },
+					);
+
+					return respond(403, {
+						error: "forbidden",
+						why: "this delegation does not allow writing; the right lives in the application, not in the token",
+					});
+				}
+
+				const list = notes.get(verified.value.subject) ?? [];
+
+				if (action === "write") {
+					list.push(`${verified.value.agent}: ${text(body, "text")}`);
+					notes.set(verified.value.subject, list);
+				}
+
+				return respond(200, {
+					actingAs: "agent",
+					agent: verified.value.agent,
+					forPerson: verified.value.subject,
+					delegation: verified.value.delegation,
+					boundTo: verified.value.boundTo ?? null,
+					notes: list,
+				});
+			}
 			case "/api/me": {
 				const verified = await auth.sessions.verify(bearerToken(request));
 
@@ -433,7 +727,11 @@ export async function createPlayground(): Promise<Playground> {
 					return respond(401, { error: verified.error });
 				}
 
-				const level = revocationLevel(text(body, "scope"), verified.value);
+				const level = revocationLevel(
+					text(body, "scope"),
+					verified.value,
+					text(body, "id"),
+				);
 
 				if (!level.ok) {
 					return respond(400, { error: level.error });

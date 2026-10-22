@@ -102,12 +102,39 @@ pre { margin: 8px 0 0; padding: 8px; background: var(--background); border-radiu
 		<pre id="response">No request yet.</pre>
 	</section>
 
+	<section class="card" id="second-step-card" hidden>
+		<h2>Second factor required</h2>
+		<p class="hint">The policy asked for another factor before it lets this person in. The continuation is single use: a wrong code burns it and you start again from the first step.</p>
+		<div class="row">
+			<span>Factor: <b id="second-factor-name"></b></span>
+			<span>Account (email): <input type="text" id="second-account"></span>
+			<span>Code: <input type="text" id="second-code" value="424242"></span>
+		</div>
+		<button type="button" class="primary" id="second-submit">Submit code</button>
+	</section>
+
+	<section class="card">
+		<h2>3. Step-up and freshness</h2>
+		<p class="hint">In a session row below press <b>Enable 2FA</b>: the simulated authenticator shows the code <code>424242</code>. The next sign-in of that person then stops with <code>step-up-required</code> and asks for the code. A session also remembers which factors were passed and how long ago: <b>Needs authenticator</b> and <b>Recent (30 s)</b> are two sensitive actions that check it.</p>
+	</section>
+
+	<section class="card">
+		<h2>4. Agents (delegation)</h2>
+		<p class="hint">Press <b>Delegate agent</b> in a session row. The agent gets its own token, which is never accepted as a person (try <b>As session</b>). What it may do is kept by the application (<b>may write</b>), not in the token. A delegation tied to the session dies with it; a free one survives sign-out until its delegation, the agent or the person is revoked.</p>
+		<div class="row">
+			<span>Agent name: <input type="text" id="agent-name" value="mcp-client-7"></span>
+			<label><input type="checkbox" id="agent-bound"> tied to the session</label>
+			<label><input type="checkbox" id="agent-write"> may write notes</label>
+		</div>
+		<table id="agents"><thead><tr><th>Agent</th><th>Delegation</th><th>For</th><th>Tied</th><th>Write</th><th>Alive</th><th>Actions</th></tr></thead><tbody></tbody></table>
+	</section>
+
 	<div class="grid">
 		<section class="card">
 			<h2>Controls</h2>
 			<label><input type="checkbox" id="provider-down"> Mail provider is down (the outbox retries, sign-in is unaffected)</label>
 			<p id="outbox-stats" class="hint"></p>
-			<table id="subjects"><thead><tr><th>Subject</th><th>Tenant</th><th>Emails</th><th></th></tr></thead><tbody></tbody></table>
+			<table id="subjects"><thead><tr><th>Subject</th><th>Tenant</th><th>Emails</th><th>2FA</th><th></th></tr></thead><tbody></tbody></table>
 		</section>
 	</div>
 
@@ -118,6 +145,9 @@ pre { margin: 8px 0 0; padding: 8px; background: var(--background); border-radiu
 </main>
 <script>
 const STORAGE_KEY = "vow-auth-playground-sessions";
+const AGENTS_KEY = "vow-auth-playground-agents";
+const AUTHENTICATOR_KEY = "vow-auth-playground-authenticator";
+let pendingStep;
 const PRESETS = {
 	"Verified email": { provider: "google", externalId: "g-alice", email: "alice@example.com", emailVerified: true },
 	"Unverified email (takeover attempt)": { provider: "evil", externalId: "e-1", email: "alice@example.com", emailVerified: false },
@@ -138,6 +168,24 @@ const readSessions = () => {
 	try { return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]"); } catch { return []; }
 };
 const writeSessions = (sessions) => localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+const readAgents = () => {
+	try { return JSON.parse(localStorage.getItem(AGENTS_KEY) ?? "[]"); } catch { return []; }
+};
+const writeAgents = (agents) => localStorage.setItem(AGENTS_KEY, JSON.stringify(agents));
+const handleSignIn = (title, result, context) => {
+	show(title, result.status, result.data);
+	if (result.status === 200) {
+		rememberSession(result.data);
+		byId("second-step-card").hidden = true;
+		pendingStep = undefined;
+	} else if (result.data.error === "step-up-required") {
+		pendingStep = { tenant: context.tenant, device: context.device, continuation: result.data.continuation };
+		byId("second-step-card").hidden = false;
+		byId("second-factor-name").textContent = result.data.factor;
+		byId("second-account").value = localStorage.getItem(AUTHENTICATOR_KEY) ?? context.account ?? "";
+	}
+	render();
+};
 const show = (title, status, body) => {
 	byId("response").textContent = `${title} -> ${status}\n${JSON.stringify(body, null, 2)}`;
 };
@@ -171,10 +219,11 @@ byId("send-link").addEventListener("click", async () => {
 });
 
 byId("provider-sign-in").addEventListener("click", async () => {
-	const result = await post("/api/sign-in/provider", { tenant: byId("tenant").value, device: byId("device").value, claims: byId("claims").value });
-	show("provider sign-in", result.status, result.data);
-	if (result.status === 200) rememberSession(result.data);
-	render();
+	const context = { tenant: byId("tenant").value, device: byId("device").value };
+	const result = await post("/api/sign-in/provider", { ...context, claims: byId("claims").value });
+	let account;
+	try { account = JSON.parse(byId("claims").value).email; } catch { account = undefined; }
+	handleSignIn("provider sign-in", result, { ...context, account });
 });
 
 const parameters = new URLSearchParams(location.search);
@@ -182,16 +231,30 @@ if (parameters.get("token")) {
 	byId("confirm-card").hidden = false;
 	byId("confirm-tenant").textContent = parameters.get("tenant") ?? "";
 	byId("confirm-button").addEventListener("click", async () => {
-		const result = await post("/api/sign-in/email-link", {
-			tenant: parameters.get("tenant") ?? "",
-			device: byId("confirm-device").value,
-			token: parameters.get("token") ?? "",
-		});
-		show("confirm link", result.status, result.data);
-		if (result.status === 200) rememberSession(result.data);
-		render();
+		const context = { tenant: parameters.get("tenant") ?? "", device: byId("confirm-device").value };
+		const result = await post("/api/sign-in/email-link", { ...context, token: parameters.get("token") ?? "" });
+		handleSignIn("confirm link", result, context);
 	});
 }
+
+byId("second-submit").addEventListener("click", async () => {
+	if (pendingStep === undefined) return;
+	const result = await post("/api/sign-in/second-factor", {
+		...pendingStep,
+		account: byId("second-account").value,
+		code: byId("second-code").value,
+	});
+	show("second factor", result.status, result.data);
+	if (result.status === 200) {
+		rememberSession(result.data);
+		byId("second-step-card").hidden = true;
+		pendingStep = undefined;
+	} else if (result.data.error === "invalid-proof" || result.data.error === "invalid-token") {
+		byId("second-step-card").hidden = true;
+		pendingStep = undefined;
+	}
+	render();
+});
 
 byId("provider-down").addEventListener("change", async (event) => {
 	await post("/api/settings", { mailProviderDown: event.target.checked });
@@ -214,6 +277,41 @@ const renderSessions = () => {
 			show("check session", response.status, await response.json());
 			render();
 		});
+		add("Enable 2FA", async () => {
+			const result = await post("/api/second-factor/enable", { enabled: true }, session.token);
+			show("enable second factor", result.status, result.data);
+			if (result.status === 200) localStorage.setItem(AUTHENTICATOR_KEY, result.data.account);
+			render();
+		});
+		add("Disable 2FA", async () => {
+			const result = await post("/api/second-factor/enable", { enabled: false }, session.token);
+			show("disable second factor", result.status, result.data);
+			render();
+		});
+		add("Recent (30 s)", async () => {
+			const result = await post("/api/sensitive", { maxAgeSeconds: 30 }, session.token);
+			show("sensitive action, recent sign-in", result.status, result.data);
+		});
+		add("Needs authenticator", async () => {
+			const result = await post("/api/sensitive", { requireMethod: "authenticator" }, session.token);
+			show("sensitive action, second factor", result.status, result.data);
+		});
+		add("Notes", async () => {
+			const result = await post("/api/notes", { action: "read" }, session.token);
+			show("notes as a person", result.status, result.data);
+		});
+		add("Delegate agent", async () => {
+			const result = await post("/api/agents/delegate", {
+				agent: byId("agent-name").value,
+				boundToSession: byId("agent-bound").checked,
+				canWrite: byId("agent-write").checked,
+			}, session.token);
+			show("delegate agent", result.status, result.data);
+			if (result.status === 200) {
+				writeAgents([{ token: result.data.token, delegation: result.data.delegation, agent: result.data.agent }, ...readAgents()]);
+			}
+			render();
+		});
 		for (const scope of ["session", "device", "user", "tenant"]) {
 			add(`Revoke ${scope}`, async () => {
 				const result = await post("/api/revoke", { scope }, session.token);
@@ -230,6 +328,70 @@ const renderSessions = () => {
 	}
 };
 
+const revokeWithAnySession = async (body) => {
+	for (const session of readSessions()) {
+		const result = await post("/api/revoke", body, session.token);
+		if (result.status === 200) return { ...result, via: session.subject.slice(0, 8) };
+	}
+	return { status: 401, data: { error: "no live session left to revoke with: sign in again" } };
+};
+
+const renderAgents = (state) => {
+	const body = byId("agents").tBodies[0];
+	body.replaceChildren();
+	const local = new Map(readAgents().map((agent) => [agent.delegation, agent]));
+	for (const agent of state.agents) {
+		const stored = local.get(agent.delegation);
+		const row = element("tr");
+		const actions = element("td");
+		const add = (label, action) => {
+			const button = element("button", label);
+			button.addEventListener("click", action);
+			actions.append(button);
+		};
+		if (stored !== undefined) {
+			add("Read", async () => {
+				const result = await post("/api/agents/act", { action: "read" }, stored.token);
+				show("agent reads notes", result.status, result.data);
+				render();
+			});
+			add("Write", async () => {
+				const result = await post("/api/agents/act", { action: "write", text: `hello from ${agent.agent}` }, stored.token);
+				show("agent writes a note", result.status, result.data);
+				render();
+			});
+			add("As session", async () => {
+				const result = await post("/api/me", {}, stored.token);
+				show("agent token used as a session", result.status, result.data);
+			});
+		}
+		add("Revoke delegation", async () => {
+			const result = await revokeWithAnySession({ scope: "delegation", id: agent.delegation });
+			show("revoke delegation", result.status, result.data);
+			render();
+		});
+		add("Revoke agent", async () => {
+			const result = await revokeWithAnySession({ scope: "agent", id: agent.agent });
+			show("revoke agent (every delegation to it)", result.status, result.data);
+			render();
+		});
+		add("Forget", () => {
+			writeAgents(readAgents().filter((item) => item.delegation !== agent.delegation));
+			render();
+		});
+		row.append(
+			element("td", agent.agent),
+			element("td", agent.delegation.slice(0, 8), "mono"),
+			element("td", agent.subject.slice(0, 8), "mono"),
+			element("td", agent.boundToSession ? "yes" : "no"),
+			element("td", agent.canWrite ? "yes" : "no"),
+			element("td", agent.alive ? "yes" : "revoked", agent.alive ? "good" : "bad"),
+			actions,
+		);
+		body.append(row);
+	}
+};
+
 const outcomeClass = (outcome) => {
 	return outcome === "refusal" ? "bad" : "good";
 };
@@ -238,10 +400,11 @@ let lastRendered = "";
 
 const render = async () => {
 	const state = await (await fetch("/api/state")).json();
-	const serialized = JSON.stringify([state, readSessions()]);
+	const serialized = JSON.stringify([state, readSessions(), readAgents()]);
 	if (serialized === lastRendered) return;
 	lastRendered = serialized;
 	renderSessions();
+	renderAgents(state);
 	byId("provider-down").checked = state.settings.mailProviderDown;
 	byId("outbox-stats").textContent = `Outbox: ${state.outbox.pending} pending, ${state.outbox.buried} buried.`;
 
@@ -274,7 +437,7 @@ const render = async () => {
 		});
 		const cell = element("td");
 		cell.append(button, remove);
-		row.append(element("td", subject.id.slice(0, 8), "mono"), element("td", subject.tenant), element("td", subject.emails.join(", ")), cell);
+		row.append(element("td", subject.id.slice(0, 8), "mono"), element("td", subject.tenant), element("td", subject.emails.join(", ")), element("td", subject.secondFactor ? "on" : "off"), cell);
 		subjects.append(row);
 	}
 
