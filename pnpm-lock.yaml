@@ -230,6 +230,18 @@ importers:
 
   packages/core: {}
 
+  packages/doctor:
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.4
+        version: 26.6.4
+      '@vow-auth/adapter-memory':
+        specifier: workspace:*
+        version: link:../adapter-memory
+      '@vow-auth/core':
+        specifier: workspace:*
+        version: link:../core
+
   packages/factor-email-link:
     devDependencies:
       '@vow-auth/adapter-memory':
