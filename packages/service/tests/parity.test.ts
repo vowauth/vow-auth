@@ -4,6 +4,7 @@ import {
 	claimsFactor,
 	createService,
 	type Mode,
+	totpFactor,
 	unverifiedClaims,
 	verifiedClaims,
 } from "./support.js";
@@ -37,13 +38,14 @@ describe.each(MODES)("A27: the invariants hold the same in %s mode", (mode) => {
 
 		const verified = await surface.sessions.verify(signedIn.value.token);
 
-		expect(verified).toEqual({
+		expect(verified).toMatchObject({
 			ok: true,
 			value: {
 				tenant: "acme",
 				subject: signedIn.value.subject,
 				device: "laptop",
 				session: signedIn.value.session,
+				methods: ["claims"],
 			},
 		});
 		expect(await surface.sessions.verify("1.garbage")).toEqual({
@@ -206,6 +208,67 @@ describe.each(MODES)("A27: the invariants hold the same in %s mode", (mode) => {
 		).toBe(true);
 	});
 
+	test("A2: a step-up is the same refusal in both modes and the continuation finishes the sign in", async () => {
+		const { surface, identities, stepUpSubjects } = createService(mode);
+		const claims = verifiedClaims("alice@example.com");
+		const enrolling = await signIn(surface, claims, "acme", "enrolling");
+
+		if (!enrolling.ok) {
+			throw new Error("the first sign in must pass");
+		}
+
+		await identities.linkIdentity("acme", enrolling.value.subject, {
+			provider: "totp",
+			externalId: "alice-totp",
+			emailVerified: false,
+		});
+		stepUpSubjects.add(enrolling.value.subject);
+
+		const challenge = await signIn(surface, claims);
+
+		expect(challenge).toEqual({
+			ok: false,
+			error: {
+				code: "step-up-required",
+				factor: "totp",
+				continuation: expect.any(String),
+			},
+		});
+
+		const continuation =
+			!challenge.ok && typeof challenge.error !== "string"
+				? challenge.error.continuation
+				: "";
+		const done = await surface.signIn({
+			tenant: "acme",
+			device: "laptop",
+			factor: totpFactor,
+			response: {
+				provider: "totp",
+				externalId: "alice-totp",
+				emailVerified: false,
+			},
+			continuation,
+		});
+
+		expect(done.ok && done.value.subject).toBe(enrolling.value.subject);
+
+		const verified = done.ok
+			? await surface.sessions.verify(done.value.token)
+			: undefined;
+
+		expect(verified?.ok && verified.value.methods).toEqual(["claims", "totp"]);
+		expect(
+			await surface.signIn({
+				tenant: "acme",
+				device: "laptop",
+				factor: totpFactor,
+				response: {},
+				continuation,
+			}),
+		).toEqual({ ok: false, error: "invalid-token" });
+	});
+
 	test("a scripted conversation gives the same answers in both modes", async () => {
 		const transcripts = await Promise.all(
 			MODES.map(async (candidate) => {
@@ -231,7 +294,12 @@ describe.each(MODES)("A27: the invariants hold the same in %s mode", (mode) => {
 					if (typeof value === "object" && value !== null) {
 						return Object.fromEntries(
 							Object.entries(value)
-								.filter(([key]) => key !== "resetsAtMilliseconds")
+								.filter(
+									([key]) =>
+										key !== "resetsAtMilliseconds" &&
+										key !== "authenticatedAtMilliseconds" &&
+										key !== "authenticationAgeMilliseconds",
+								)
 								.map(([key, nested]) => [key, normalize(nested)]),
 						);
 					}

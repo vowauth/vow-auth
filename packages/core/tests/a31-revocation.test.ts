@@ -92,6 +92,7 @@ const issueToken = async (
 		tenant,
 		device,
 		timeToLive: durationOf(timeToLiveMilliseconds),
+		methods: ["test"],
 	});
 
 	if (!result.ok) {
@@ -113,11 +114,12 @@ test("a token verifies to its identity with one read of the epoch store", async 
 
 	const verified = await sessionTokens.verify(token);
 
-	expect(verified.ok && verified.value).toEqual({
+	expect(verified.ok && verified.value).toMatchObject({
 		tenant: "acme",
 		subject: "alice",
 		device: "laptop",
 		session: session.id,
+		methods: ["test"],
 	});
 	expect(epochs.readCalls() - readsBefore).toBe(1);
 });
@@ -242,6 +244,8 @@ test("a sealed session of an unknown chain shape is rejected", async () => {
 			payload: {
 				chain: JSON.stringify(chain),
 				expiresAtMilliseconds: String(Date.now() + MAXIMUM_LIFE_TIME),
+				authenticatedAtMilliseconds: String(Date.now()),
+				methods: JSON.stringify(["test"]),
 			},
 			timeToLive: durationOf(MAXIMUM_LIFE_TIME),
 		});
@@ -277,6 +281,7 @@ test("only a session born from an allow decision gets a token", async () => {
 				tenant: "acme",
 				device: "laptop",
 				timeToLive: durationOf(MAXIMUM_LIFE_TIME),
+				methods: ["test"],
 			}),
 		).toEqual({ ok: false, error: "no-session" });
 	}
@@ -329,6 +334,7 @@ test("lifetimes beyond the configured maximum are a programming error", async ()
 			tenant: "acme",
 			device: "laptop",
 			timeToLive: durationOf(MAXIMUM_LIFE_TIME + 1),
+			methods: ["test"],
 		}),
 	).toEqual({ ok: false, error: "invalid-request" });
 	expect(
@@ -358,6 +364,7 @@ test("an epoch store that breaks its contract fails loudly, never open", async (
 			tenant: "acme",
 			device: "laptop",
 			timeToLive: durationOf(MAXIMUM_LIFE_TIME),
+			methods: ["test"],
 		}),
 	).rejects.toThrow("EpochStore.read");
 });

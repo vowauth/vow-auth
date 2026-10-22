@@ -4,7 +4,13 @@ import {
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
-import { type Auth, createAuth, type Factor, succeed } from "@vow-auth/core";
+import {
+	type Auth,
+	createAuth,
+	type Factor,
+	requireFactor,
+	succeed,
+} from "@vow-auth/core";
 import {
 	type AuthHandler,
 	createAuthClient,
@@ -24,34 +30,55 @@ export const claimsFactor: Factor = {
 	verify: async (response) => succeed(response),
 };
 
+export const totpFactor: Factor = {
+	id: "totp",
+	strength: "possession",
+	verify: async (response) => succeed(response),
+};
+
 export const createCore = () => {
+	const identities = createMemoryIdentityStore();
 	const banned = new Set<string>();
+	const stepUpSubjects = new Set<string>();
 	const auth: Auth = createAuth({
-		identities: createMemoryIdentityStore(),
+		identities,
 		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
 		tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 		meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
 		secrets: [{ version: 1, value: "service-seal-0123456789abcdefghijklmn" }],
 		maximumLifeTimeMilliseconds: 3_600_000,
 		sessionTimeToLiveMilliseconds: 3_600_000,
-		policy: ({ subject }) => (banned.has(subject) ? "deny" : "allow"),
+		stepUpTimeToLiveMilliseconds: 300_000,
+		policy: ({ subject, proofs }) => {
+			if (banned.has(subject)) {
+				return "deny";
+			}
+
+			return stepUpSubjects.has(subject) &&
+				!proofs.some((proof) => proof.factor === totpFactor.id)
+				? requireFactor(totpFactor.id)
+				: "allow";
+		},
 		audit: async () => undefined,
 	});
 
-	return { auth, banned };
+	return { auth, banned, identities, stepUpSubjects };
 };
 
 export const createHandler = (auth: Auth): AuthHandler => {
 	return createAuthHandler({
 		auth,
-		factors: { [claimsFactor.id]: claimsFactor },
+		factors: {
+			[claimsFactor.id]: claimsFactor,
+			[totpFactor.id]: totpFactor,
+		},
 		serviceTokens: [SERVICE_TOKEN],
 		maximumBodyBytes: 10_000,
 	});
 };
 
 export const createService = (mode: Mode) => {
-	const { auth, banned } = createCore();
+	const { auth, banned, identities, stepUpSubjects } = createCore();
 	const reasons: UnavailableReason[] = [];
 	const surface: ServiceSurface =
 		mode === "in-process"
@@ -66,7 +93,7 @@ export const createService = (mode: Mode) => {
 					},
 				});
 
-	return { surface, banned, reasons };
+	return { surface, banned, reasons, identities, stepUpSubjects };
 };
 
 export const verifiedClaims = (email: string, provider = "email") => ({

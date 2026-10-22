@@ -15,6 +15,7 @@ import { isNonEmptyString } from "./shared/is-non-empty-string.js";
 import { isPlainObject } from "./shared/is-plain-object.js";
 import { createMintRegistry } from "./shared/mint-registry.js";
 import { own } from "./shared/own.js";
+import { safeParseJson } from "./shared/safe-parse-json.js";
 
 /** The provider name of identities that are identified by their email address alone. */
 export const EMAIL_PROVIDER = "email";
@@ -196,3 +197,62 @@ export async function verifyProof(
 }
 
 export const isMintedProof = mintedProofs.has;
+
+const PROOF_STRENGTHS = ["knowledge", "possession", "inherence"] as const;
+
+/**
+ * Writes a proof as text, so it can wait in a store between two steps of a
+ * sign-in. Only `restoreProof` turns the text back into a proof.
+ */
+export const serializeProof = (proof: Proof): string => {
+	return JSON.stringify({
+		factor: proof.factor,
+		strength: proof.strength,
+		verifiedAtMilliseconds: proof.verifiedAtMilliseconds,
+		claims: {
+			provider: proof.claims.provider,
+			externalId: proof.claims.externalId,
+			email: proof.claims.email?.address,
+			emailVerified: proof.claims.emailVerified,
+		},
+	});
+};
+
+/**
+ * Mints a proof again from text that `serializeProof` wrote and a store kept.
+ * The claims go through the same closed-shape check as a factor's, so a
+ * damaged record is refused with `invalid-proof`, never trusted.
+ */
+export const restoreProof = (text: string): Result<Proof> => {
+	const stored = safeParseJson(text);
+
+	if (!isPlainObject(stored)) {
+		return fail(ERROR_CODES.invalidProof);
+	}
+
+	const factor = own(stored, "factor");
+	const strength = PROOF_STRENGTHS.find(
+		(candidate) => candidate === own(stored, "strength"),
+	);
+	const verifiedAtMilliseconds = own(stored, "verifiedAtMilliseconds");
+	const claims = parseClaims(own(stored, "claims"));
+
+	if (
+		!isNonEmptyString(factor) ||
+		strength === undefined ||
+		typeof verifiedAtMilliseconds !== "number" ||
+		!Number.isFinite(verifiedAtMilliseconds) ||
+		!claims.ok
+	) {
+		return fail(ERROR_CODES.invalidProof);
+	}
+
+	return succeed(
+		mintedProofs.mint({
+			factor,
+			strength,
+			verifiedAtMilliseconds,
+			claims: claims.value,
+		}),
+	);
+};

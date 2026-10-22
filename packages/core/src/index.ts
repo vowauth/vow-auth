@@ -14,6 +14,8 @@ export {
 	DENY_REASONS,
 	type Decision,
 	type DenyReason,
+	requireFactor,
+	type StepUpVerdict,
 } from "./decision.js";
 export { type Duration, defineDuration } from "./duration.js";
 export { ERROR_CODES } from "./errors.js";
@@ -91,7 +93,9 @@ export type {
 	SignedIn,
 	SignIn,
 	SignInPolicyInput,
+	SignInRefusal,
 	SignInRequest,
+	StepUpRequired,
 } from "./sign-in.js";
 export { isStoreFullError, storeFullError } from "./store-full.js";
 export type { StoreStats } from "./store-stats.js";

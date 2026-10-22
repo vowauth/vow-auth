@@ -31,6 +31,12 @@ export type AuthOptions = {
 	/** The longest life time of any session token. */
 	readonly maximumLifeTimeMilliseconds: number;
 	readonly sessionTimeToLiveMilliseconds: number;
+	/**
+	 * How long a person has to pass the second factor when the policy asks for
+	 * one (`requireFactor`). Leave it out and a policy cannot ask: its step-up
+	 * verdict becomes a deny.
+	 */
+	readonly stepUpTimeToLiveMilliseconds?: number | undefined;
 	/** Answers `"allow"` to let a subject in; anything else keeps them out. */
 	readonly policy: (input: SignInPolicyInput) => unknown;
 	/**
@@ -100,8 +106,10 @@ export function createAuth(options: AuthOptions): Auth {
 		identities: options.identities,
 		sessionTokens,
 		mutateIdentity,
+		tokens,
 		policy: options.policy,
 		sessionTimeToLiveMilliseconds: options.sessionTimeToLiveMilliseconds,
+		stepUpTimeToLiveMilliseconds: options.stepUpTimeToLiveMilliseconds,
 		audit,
 	});
 

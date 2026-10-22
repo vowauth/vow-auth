@@ -263,7 +263,9 @@ export async function createPlayground(): Promise<Playground> {
 		const result = await runSignIn({ tenant, device, factor, response });
 
 		if (!result.ok) {
-			return respond(statusOf(result.error), { error: result.error });
+			return typeof result.error === "string"
+				? respond(statusOf(result.error), { error: result.error })
+				: respond(401, result.error);
 		}
 
 		const signedIn = result.value;

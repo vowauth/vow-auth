@@ -205,6 +205,16 @@ test("a body of the wrong shape, with an unknown key or a prototype key, is 400"
 			JSON.parse('{"token":"x","__proto__":{"admin":true}}'),
 		],
 		["/v1/sign-in", { tenant: "a", device: "d" }],
+		[
+			"/v1/sign-in",
+			{
+				tenant: "a",
+				device: "d",
+				factor: "claims",
+				response: {},
+				continuation: 5,
+			},
+		],
 		["/v1/sign-in", { tenant: "a", device: "d", factor: 1, response: 1 }],
 		[
 			"/v1/sessions/revoke",

@@ -50,6 +50,7 @@ const issueFor = async (
 		tenant: "acme",
 		device,
 		timeToLive: durationOf(timeToLiveMilliseconds),
+		methods: ["test"],
 	});
 
 	if (!token.ok) {
@@ -153,6 +154,7 @@ test("revocations within one millisecond stay revoked through an overflow", asyn
 		tenant: "acme",
 		device: "laptop",
 		timeToLive: durationOf(MAXIMUM_LIFE_TIME),
+		methods: ["test"],
 	});
 	const token = issued.ok ? issued.value : "";
 	expect(await isValid(sessionTokens, token)).toBe(true);

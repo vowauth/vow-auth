@@ -187,6 +187,14 @@ test("A28: a success needs a well formed answer, whatever else the service says"
 			value !== null &&
 			["tenant", "subject", "device", "session"].every(
 				(key) => typeof Reflect.get(value, key) === "string",
+			) &&
+			Array.isArray(Reflect.get(value, "methods")) &&
+			Reflect.get(value, "methods").length > 0 &&
+			Reflect.get(value, "methods").every(
+				(method: unknown) => typeof method === "string",
+			) &&
+			["authenticatedAtMilliseconds", "authenticationAgeMilliseconds"].every(
+				(key) => Number.isFinite(Reflect.get(value, key)),
 			)
 		);
 	};
@@ -207,6 +215,15 @@ test("A28: a success needs a well formed answer, whatever else the service says"
 						subject: fastCheck.oneof(fastCheck.string(), fastCheck.integer()),
 						device: fastCheck.string(),
 						session: fastCheck.string(),
+						methods: fastCheck.oneof(
+							fastCheck.array(fastCheck.string(), { maxLength: 3 }),
+							fastCheck.integer(),
+						),
+						authenticatedAtMilliseconds: fastCheck.oneof(
+							fastCheck.integer(),
+							fastCheck.string(),
+						),
+						authenticationAgeMilliseconds: fastCheck.integer(),
 					}),
 				}),
 			),

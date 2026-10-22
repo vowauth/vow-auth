@@ -1,6 +1,7 @@
 import {
 	createMemoryEpochStore,
 	createMemoryIdentityStore,
+	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
 import * as core from "@vow-auth/core";
 import {
@@ -9,6 +10,7 @@ import {
 	createSealer,
 	createSessionTokens,
 	createSignIn,
+	createTokens,
 	type Factor,
 	type ProofStrength,
 	type SignInPolicyInput,
@@ -60,6 +62,9 @@ const createFixture = (options: {
 		identities,
 		sessionTokens,
 		mutateIdentity,
+		tokens: createTokens({
+			store: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
+		}),
 		policy: options.policy ?? (() => "allow"),
 		sessionTimeToLiveMilliseconds: LIFE_TIME,
 		audit,
@@ -93,7 +98,12 @@ test("A14: a session that was not born in the flow gets no token", async () => {
 	const { sessionTokens } = createFixture({});
 	const forged = await sessionTokens.issue(
 		{ id: "s-1", subject: "admin" },
-		{ tenant: "acme", device: "laptop", timeToLive: durationOf(LIFE_TIME) },
+		{
+			tenant: "acme",
+			device: "laptop",
+			timeToLive: durationOf(LIFE_TIME),
+			methods: ["test"],
+		},
 	);
 
 	expect(forged.ok).toBe(false);
@@ -281,6 +291,9 @@ test("when the email cannot be confirmed the policy is not even asked", async ()
 		identities,
 		sessionTokens,
 		mutateIdentity: async () => ({ ok: false, error: "forbidden" }),
+		tokens: createTokens({
+			store: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
+		}),
 		policy,
 		sessionTimeToLiveMilliseconds: LIFE_TIME,
 	});

@@ -111,6 +111,7 @@ describe.runIf(redisUrl !== undefined)("on a live Redis", () => {
 						tenant,
 						device: "laptop",
 						timeToLive: durationOf(60_000),
+						methods: ["test"],
 					})
 				: undefined;
 

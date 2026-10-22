@@ -86,6 +86,7 @@ const createFixture = (audit?: AuditSink) => {
 			tenant,
 			device,
 			timeToLive: durationOf(LIFE_TIME),
+			methods: ["test"],
 		});
 
 		if (!token.ok) {

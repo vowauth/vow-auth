@@ -11,6 +11,7 @@ import {
 	type Result,
 	type RevocationLevel,
 	type SignedIn,
+	type SignInRefusal,
 	type SignInRequest,
 	succeed,
 	type VerifiedSession,
@@ -104,12 +105,33 @@ const parseVerifiedSession = (value: unknown): VerifiedSession | undefined => {
 	const subject = field(value, "subject");
 	const device = field(value, "device");
 	const session = field(value, "session");
+	const methods = field(value, "methods");
+	const authenticatedAtMilliseconds = field(
+		value,
+		"authenticatedAtMilliseconds",
+	);
+	const authenticationAgeMilliseconds = field(
+		value,
+		"authenticationAgeMilliseconds",
+	);
 
 	return isString(tenant) &&
 		isString(subject) &&
 		isString(device) &&
-		isString(session)
-		? { tenant, subject, device, session }
+		isString(session) &&
+		isStringArray(methods) &&
+		methods.length > 0 &&
+		isFiniteNumber(authenticatedAtMilliseconds) &&
+		isFiniteNumber(authenticationAgeMilliseconds)
+		? {
+				tenant,
+				subject,
+				device,
+				session,
+				methods,
+				authenticatedAtMilliseconds,
+				authenticationAgeMilliseconds,
+			}
 		: undefined;
 };
 
@@ -260,6 +282,23 @@ export function createAuthClient(options: AuthClientOptions): ServiceSurface {
 		return isString(error) && error.length > 0 ? error : undefined;
 	};
 
+	const parseSignInRefusal = (error: unknown): SignInRefusal | undefined => {
+		const code = parseCode(error);
+
+		if (code !== undefined) {
+			return code;
+		}
+
+		const factor = field(error, "factor");
+		const continuation = field(error, "continuation");
+
+		return field(error, "code") === ERROR_CODES.stepUpRequired &&
+			isString(factor) &&
+			isString(continuation)
+			? { code: ERROR_CODES.stepUpRequired, factor, continuation }
+			: undefined;
+	};
+
 	const parseRefusal = (error: unknown): MeterRefusal | undefined => {
 		const code = field(error, "code");
 		const resetsAtMilliseconds = field(error, "resetsAtMilliseconds");
@@ -298,9 +337,10 @@ export function createAuthClient(options: AuthClientOptions): ServiceSurface {
 					device: request.device,
 					factor: request.factor.id,
 					response: request.response,
+					continuation: request.continuation,
 				},
 				parseSignedIn,
-				parseCode,
+				parseSignInRefusal,
 				ERROR_CODES.unavailable,
 			);
 		},

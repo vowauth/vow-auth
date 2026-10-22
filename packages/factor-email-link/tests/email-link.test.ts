@@ -93,6 +93,7 @@ test("a link signs a person in end to end and revocation ends the session", asyn
 		tenant: "acme",
 		device: "laptop",
 		timeToLive: durationOf(FIFTEEN_MINUTES),
+		methods: ["test"],
 	});
 
 	if (!token.ok) {

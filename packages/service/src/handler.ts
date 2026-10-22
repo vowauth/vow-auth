@@ -237,12 +237,20 @@ export function createAuthHandler(options: AuthHandlerOptions): AuthHandler {
 				const tenant = field(body, "tenant");
 				const device = field(body, "device");
 				const factorId = field(body, "factor");
+				const continuation = field(body, "continuation");
 
 				if (
-					!hasOnlyKeys(body, ["tenant", "device", "factor", "response"]) ||
+					!hasOnlyKeys(body, [
+						"tenant",
+						"device",
+						"factor",
+						"response",
+						"continuation",
+					]) ||
 					!isString(tenant) ||
 					!isString(device) ||
-					!isString(factorId)
+					!isString(factorId) ||
+					(continuation !== undefined && !isString(continuation))
 				) {
 					return undefined;
 				}
@@ -260,6 +268,7 @@ export function createAuthHandler(options: AuthHandlerOptions): AuthHandler {
 								device,
 								factor,
 								response: field(body, "response"),
+								...(continuation === undefined ? {} : { continuation }),
 							}),
 				);
 			},

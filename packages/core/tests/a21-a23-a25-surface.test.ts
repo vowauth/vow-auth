@@ -65,6 +65,7 @@ test("A21, A25: the public surface is exactly this, so a new export or a weakeni
 		"isPublicAddress",
 		"isStoreFullError",
 		"report",
+		"requireFactor",
 		"slidingWindow",
 		"storeFullError",
 		"succeed",
@@ -78,11 +79,12 @@ test("A21, A25: the public surface is exactly this, so a new export or a weakeni
 		secrets: true,
 		maximumLifeTimeMilliseconds: true,
 		sessionTimeToLiveMilliseconds: true,
+		stepUpTimeToLiveMilliseconds: true,
 		policy: true,
 		audit: true,
 	} satisfies Record<keyof AuthOptions, true>;
 
-	expect(Object.keys(optionKeys)).toHaveLength(9);
+	expect(Object.keys(optionKeys)).toHaveLength(10);
 });
 
 test("A25: an unknown option is a compile error, not silence", () => {

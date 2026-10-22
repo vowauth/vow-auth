@@ -242,6 +242,7 @@ test("session tokens record issue, refusals with their reason, and revocation", 
 		tenant: "acme",
 		device: "laptop",
 		timeToLive: durationOf(LIFE_TIME),
+		methods: ["test"],
 	});
 
 	if (!issued.ok) {
@@ -305,6 +306,7 @@ test("an expired session token is told apart from a forged one when the sealer r
 		tenant: "acme",
 		device: "laptop",
 		timeToLive: durationOf(1_000),
+		methods: ["test"],
 	});
 
 	if (!issued.ok) {
@@ -369,6 +371,7 @@ test("no record carries a secret", async () => {
 		tenant: "acme",
 		device: "laptop",
 		timeToLive: durationOf(LIFE_TIME),
+		methods: ["test"],
 	});
 
 	if (!issued.ok) {
@@ -463,6 +466,7 @@ test("a failing sink prevents a link, a token and a session token", async () => 
 			tenant: "acme",
 			device: "laptop",
 			timeToLive: durationOf(LIFE_TIME),
+			methods: ["test"],
 		}),
 	).rejects.toThrow("the audit store is down");
 });
@@ -499,6 +503,7 @@ test("a failing sink never blocks a revocation, and the caller still learns of i
 		tenant: "acme",
 		device: "laptop",
 		timeToLive: durationOf(LIFE_TIME),
+		methods: ["test"],
 	});
 
 	if (!issued.ok) {
@@ -531,6 +536,7 @@ test("the core reports exactly the documented events", () => {
 		"session.issue",
 		"session.revoke",
 		"session.verify",
+		"signin.continue",
 		"token.consume",
 		"token.issue",
 	]);

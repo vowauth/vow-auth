@@ -35,6 +35,8 @@ export type IssueSessionTokenInput = {
 	readonly tenant: string;
 	readonly device: string;
 	readonly timeToLive: Duration;
+	/** The ids of the factors the person passed to get this session, in order. */
+	readonly methods: readonly string[];
 };
 
 /** The identity a valid session token carries. */
@@ -43,6 +45,16 @@ export type VerifiedSession = {
 	readonly subject: string;
 	readonly device: string;
 	readonly session: string;
+	/** The ids of the factors passed to get this session, in order. */
+	readonly methods: readonly string[];
+	/** When the person last proved who they are, by the epoch store's clock. */
+	readonly authenticatedAtMilliseconds: number;
+	/**
+	 * How long ago that was, by the same clock at the moment of this check. An
+	 * application that wants a recent sign in for a sensitive action compares
+	 * this to its limit and asks the person to sign in again when it is over.
+	 */
+	readonly authenticationAgeMilliseconds: number;
 };
 
 /** A level to revoke; revoking a level revokes every token whose chain contains it. */
@@ -125,6 +137,18 @@ const isLink = (
 		typeof own(value, "id") === "string" &&
 		Number.isFinite(own(value, "stamp"))
 	);
+};
+
+const parseMethods = (
+	raw: string | undefined,
+): readonly string[] | undefined => {
+	const parsed = raw === undefined ? undefined : safeParseJson(raw);
+
+	return Array.isArray(parsed) &&
+		parsed.length > 0 &&
+		parsed.every((method) => typeof method === "string" && method !== "")
+		? parsed
+		: undefined;
 };
 
 const parseChain = (
@@ -222,6 +246,8 @@ export function createSessionTokens(
 						expiresAtMilliseconds: String(
 							reading.now + input.timeToLive.milliseconds,
 						),
+						authenticatedAtMilliseconds: String(reading.now),
+						methods: JSON.stringify(input.methods),
 					},
 					timeToLive: input.timeToLive,
 				}),
@@ -275,6 +301,19 @@ export function createSessionTokens(
 			const expiresAtMilliseconds = Number(
 				own(unsealed.value, "expiresAtMilliseconds"),
 			);
+			const authenticatedAtMilliseconds = Number(
+				own(unsealed.value, "authenticatedAtMilliseconds"),
+			);
+			const methods = parseMethods(own(unsealed.value, "methods"));
+
+			if (
+				methods === undefined ||
+				!Number.isFinite(authenticatedAtMilliseconds)
+			) {
+				return refuse(AUDIT_REASONS.malformed, tenant, user.id, {
+					device: device.id,
+				});
+			}
 
 			if (!(reading.now < expiresAtMilliseconds)) {
 				return refuse(AUDIT_REASONS.expired, tenant, user.id, {
@@ -298,6 +337,12 @@ export function createSessionTokens(
 				subject: user.id,
 				device: device.id,
 				session: session.id,
+				methods,
+				authenticatedAtMilliseconds,
+				authenticationAgeMilliseconds: Math.max(
+					0,
+					reading.now - authenticatedAtMilliseconds,
+				),
 			});
 		},
 		async revoke(level) {
