@@ -84,9 +84,12 @@ export type {
 	EpochStore,
 } from "./session-tokens/epoch-store.js";
 export type {
+	DelegateInput,
+	Delegation,
 	IssueSessionTokenInput,
 	RevocationLevel,
 	SessionTokens,
+	VerifiedAgent,
 	VerifiedSession,
 } from "./session-tokens/session-tokens.js";
 export type {

@@ -53,6 +53,17 @@ export type Auth = {
 	readonly signIn: SignIn;
 	/** Checks and revokes session tokens; issuing is the sign-in flow's alone. */
 	readonly sessions: Pick<SessionTokens, "verify" | "revoke">;
+	/**
+	 * Agents that act for a person. A person's session token is turned into an
+	 * agent's token with `delegate`; `verify` accepts agent tokens only, and
+	 * `sessions.verify` accepts session tokens only, so an application that
+	 * does not know about agents never takes one for a person. Revoke an agent,
+	 * a delegation, the person, or (for a delegation tied to a session) the
+	 * device or session with `sessions.revoke`.
+	 */
+	readonly agents: Pick<SessionTokens, "delegate"> & {
+		readonly verify: SessionTokens["verifyAgent"];
+	};
 	/** One-time secrets bound to a purpose, for factors such as an email link. */
 	readonly tokens: Tokens;
 	/** Seals short-lived values such as an OAuth state. */
@@ -118,6 +129,10 @@ export function createAuth(options: AuthOptions): Auth {
 		sessions: {
 			verify: sessionTokens.verify,
 			revoke: sessionTokens.revoke,
+		},
+		agents: {
+			delegate: sessionTokens.delegate,
+			verify: sessionTokens.verifyAgent,
 		},
 		tokens,
 		meter,

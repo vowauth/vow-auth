@@ -1,4 +1,6 @@
 import {
+	type DelegateInput,
+	type Delegation,
 	ERROR_CODES,
 	fail,
 	type IdentityChange,
@@ -14,6 +16,7 @@ import {
 	type SignInRefusal,
 	type SignInRequest,
 	succeed,
+	type VerifiedAgent,
 	type VerifiedSession,
 } from "@vow-auth/core";
 import { SERVICE_ROUTES, type ServiceSurface } from "./protocol.js";
@@ -131,6 +134,58 @@ const parseVerifiedSession = (value: unknown): VerifiedSession | undefined => {
 				methods,
 				authenticatedAtMilliseconds,
 				authenticationAgeMilliseconds,
+			}
+		: undefined;
+};
+
+const parseDelegation = (value: unknown): Delegation | undefined => {
+	const token = field(value, "token");
+	const delegation = field(value, "delegation");
+
+	return isString(token) && isString(delegation)
+		? { token, delegation }
+		: undefined;
+};
+
+const parseVerifiedAgent = (value: unknown): VerifiedAgent | undefined => {
+	const tenant = field(value, "tenant");
+	const subject = field(value, "subject");
+	const agent = field(value, "agent");
+	const delegation = field(value, "delegation");
+	const boundTo = field(value, "boundTo");
+	const device = field(boundTo, "device");
+	const session = field(boundTo, "session");
+	const delegatedAtMilliseconds = field(value, "delegatedAtMilliseconds");
+
+	if (
+		!isString(tenant) ||
+		!isString(subject) ||
+		!isString(agent) ||
+		!isString(delegation) ||
+		!isFiniteNumber(delegatedAtMilliseconds)
+	) {
+		return undefined;
+	}
+
+	if (boundTo === undefined) {
+		return {
+			tenant,
+			subject,
+			agent,
+			delegation,
+			boundTo: undefined,
+			delegatedAtMilliseconds,
+		};
+	}
+
+	return isString(device) && isString(session)
+		? {
+				tenant,
+				subject,
+				agent,
+				delegation,
+				boundTo: { device, session },
+				delegatedAtMilliseconds,
 			}
 		: undefined;
 };
@@ -364,6 +419,31 @@ export function createAuthClient(options: AuthClientOptions): ServiceSurface {
 
 					throw unavailableError("malformed");
 				}
+			},
+		},
+		agents: {
+			delegate: (sessionToken: string, input: DelegateInput) => {
+				return ask(
+					SERVICE_ROUTES.delegateAgent,
+					{
+						sessionToken,
+						agent: input.agent,
+						timeToLiveMilliseconds: input.timeToLive.milliseconds,
+						boundToSession: input.boundToSession,
+					},
+					parseDelegation,
+					parseCode,
+					ERROR_CODES.unavailable,
+				);
+			},
+			verify: (token: string) => {
+				return ask(
+					SERVICE_ROUTES.verifyAgent,
+					{ token },
+					parseVerifiedAgent,
+					parseCode,
+					ERROR_CODES.unavailable,
+				);
 			},
 		},
 		meter: {

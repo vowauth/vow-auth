@@ -205,6 +205,36 @@ test("a body of the wrong shape, with an unknown key or a prototype key, is 400"
 			JSON.parse('{"token":"x","__proto__":{"admin":true}}'),
 		],
 		["/v1/sign-in", { tenant: "a", device: "d" }],
+		["/v1/agents/verify", {}],
+		["/v1/agents/verify", { token: 1 }],
+		["/v1/agents/verify", { token: "x", extra: true }],
+		["/v1/agents/delegate", { sessionToken: "x", agent: "a" }],
+		[
+			"/v1/agents/delegate",
+			{ sessionToken: "x", agent: "a", timeToLiveMilliseconds: 0 },
+		],
+		[
+			"/v1/agents/delegate",
+			{ sessionToken: "x", agent: 1, timeToLiveMilliseconds: 1000 },
+		],
+		[
+			"/v1/agents/delegate",
+			{
+				sessionToken: "x",
+				agent: "a",
+				timeToLiveMilliseconds: 1000,
+				boundToSession: "yes",
+			},
+		],
+		[
+			"/v1/agents/delegate",
+			{
+				sessionToken: "x",
+				agent: "a",
+				timeToLiveMilliseconds: 1000,
+				extra: true,
+			},
+		],
 		[
 			"/v1/sign-in",
 			{
@@ -223,7 +253,7 @@ test("a body of the wrong shape, with an unknown key or a prototype key, is 400"
 		["/v1/sessions/revoke", { level: { tenant: "a", scope: "user" } }],
 		[
 			"/v1/sessions/revoke",
-			{ level: { tenant: "a", scope: "agent", id: "x" } },
+			{ level: { tenant: "a", scope: "robot", id: "x" } },
 		],
 		["/v1/sessions/revoke", { level: "tenant" }],
 		["/v1/meter/consume", { scope: { tenant: "a" }, rule: {} }],

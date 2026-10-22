@@ -1,4 +1,5 @@
 import {
+	defineDuration,
 	defineMeterRule,
 	ERROR_CODES,
 	type Factor,
@@ -175,7 +176,11 @@ const parseLevel = (raw: unknown): RevocationLevel | undefined => {
 	}
 
 	if (
-		(scope === "user" || scope === "device" || scope === "session") &&
+		(scope === "user" ||
+			scope === "device" ||
+			scope === "session" ||
+			scope === "agent" ||
+			scope === "delegation") &&
 		isString(id)
 	) {
 		return { tenant, scope, id };
@@ -280,6 +285,53 @@ export function createAuthHandler(options: AuthHandlerOptions): AuthHandler {
 
 				return hasOnlyKeys(body, ["token"]) && isString(token)
 					? respond(200, await auth.sessions.verify(token))
+					: undefined;
+			},
+		],
+		[
+			SERVICE_ROUTES.delegateAgent,
+			async (body) => {
+				const sessionToken = field(body, "sessionToken");
+				const agent = field(body, "agent");
+				const timeToLiveMilliseconds = field(body, "timeToLiveMilliseconds");
+				const boundToSession = field(body, "boundToSession");
+				const timeToLive = isFiniteNumber(timeToLiveMilliseconds)
+					? defineDuration(timeToLiveMilliseconds)
+					: undefined;
+
+				if (
+					!hasOnlyKeys(body, [
+						"sessionToken",
+						"agent",
+						"timeToLiveMilliseconds",
+						"boundToSession",
+					]) ||
+					!isString(sessionToken) ||
+					!isString(agent) ||
+					timeToLive === undefined ||
+					!timeToLive.ok ||
+					(boundToSession !== undefined && typeof boundToSession !== "boolean")
+				) {
+					return undefined;
+				}
+
+				return respond(
+					200,
+					await auth.agents.delegate(sessionToken, {
+						agent,
+						timeToLive: timeToLive.value,
+						...(boundToSession === undefined ? {} : { boundToSession }),
+					}),
+				);
+			},
+		],
+		[
+			SERVICE_ROUTES.verifyAgent,
+			async (body) => {
+				const token = field(body, "token");
+
+				return hasOnlyKeys(body, ["token"]) && isString(token)
+					? respond(200, await auth.agents.verify(token))
 					: undefined;
 			},
 		],

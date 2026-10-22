@@ -1,4 +1,4 @@
-import { meterRuleOf } from "@vow-auth/store-contracts";
+import { durationOf, meterRuleOf } from "@vow-auth/store-contracts";
 import { describe, expect, test } from "vitest";
 import {
 	claimsFactor,
@@ -267,6 +267,57 @@ describe.each(MODES)("A27: the invariants hold the same in %s mode", (mode) => {
 				continuation,
 			}),
 		).toEqual({ ok: false, error: "invalid-token" });
+	});
+
+	test("A8: an agent is delegated, verified and revoked the same way in both modes", async () => {
+		const { surface } = createService(mode);
+		const alice = await signIn(surface, verifiedClaims("alice@example.com"));
+
+		if (!alice.ok) {
+			throw new Error("the sign in must pass");
+		}
+
+		const delegated = await surface.agents.delegate(alice.value.token, {
+			agent: "mcp-client-7",
+			timeToLive: durationOf(60_000),
+			boundToSession: true,
+		});
+
+		if (!delegated.ok) {
+			throw new Error("the delegation must pass");
+		}
+
+		expect(await surface.agents.verify(delegated.value.token)).toMatchObject({
+			ok: true,
+			value: {
+				tenant: "acme",
+				subject: alice.value.subject,
+				agent: "mcp-client-7",
+				delegation: delegated.value.delegation,
+				boundTo: { device: "laptop", session: alice.value.session },
+			},
+		});
+		expect(await surface.sessions.verify(delegated.value.token)).toEqual({
+			ok: false,
+			error: "invalid-session",
+		});
+
+		await surface.sessions.revoke({
+			tenant: "acme",
+			scope: "session",
+			id: alice.value.session,
+		});
+
+		expect(await surface.agents.verify(delegated.value.token)).toEqual({
+			ok: false,
+			error: "invalid-session",
+		});
+		expect(
+			await surface.agents.delegate(alice.value.token, {
+				agent: "mcp-client-7",
+				timeToLive: durationOf(60_000),
+			}),
+		).toEqual({ ok: false, error: "invalid-session" });
 	});
 
 	test("a scripted conversation gives the same answers in both modes", async () => {

@@ -2,11 +2,13 @@ import type { Auth } from "@vow-auth/core";
 
 /** The routes of the service. Every one is a POST that takes and answers JSON. */
 export const SERVICE_ROUTES = {
+	delegateAgent: "/v1/agents/delegate",
 	deleteIdentity: "/v1/identities/delete",
 	meterConsume: "/v1/meter/consume",
 	meterObserve: "/v1/meter/observe",
 	revokeSession: "/v1/sessions/revoke",
 	signIn: "/v1/sign-in",
+	verifyAgent: "/v1/agents/verify",
 	verifySession: "/v1/sessions/verify",
 } as const;
 
@@ -18,5 +20,5 @@ export const SERVICE_ROUTES = {
  */
 export type ServiceSurface = Pick<
 	Auth,
-	"signIn" | "sessions" | "meter" | "mutateIdentity"
+	"signIn" | "sessions" | "agents" | "meter" | "mutateIdentity"
 >;

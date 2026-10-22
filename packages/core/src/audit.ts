@@ -3,6 +3,7 @@ import type { ValueOf } from "./shared/value-of.js";
 /** Names of the events the core reports. Applications may report their own events through the same sink. */
 export const AUDIT_EVENTS = {
 	authorizeCheck: "authorize.check",
+	delegationGrant: "delegation.grant",
 	identityMutate: "identity.mutate",
 	identityResolve: "identity.resolve",
 	meterConsume: "meter.consume",
