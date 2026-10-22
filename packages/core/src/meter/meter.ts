@@ -2,12 +2,17 @@ import {
 	AUDIT_EVENTS,
 	AUDIT_OUTCOMES,
 	AUDIT_REASONS,
+	type AuditOutcome,
 	type AuditSink,
 	report,
 } from "../audit.js";
 import { ERROR_CODES } from "../errors.js";
 import { fail, type Result, succeed } from "../result.js";
-import type { MeterReading, MeterStore } from "./meter-store.js";
+import type {
+	MeterReading,
+	MeterStore,
+	MeterStoreResult,
+} from "./meter-store.js";
 
 /** Whose requests are counted, and what they are asked for. */
 export type MeterScope = {
@@ -28,6 +33,11 @@ export type MeterRefusal = {
 	readonly resetsAtMilliseconds: number;
 };
 
+/** What `observe` saw: the reading, and whether `consume` would have refused. */
+export type MeterObservation = MeterReading & {
+	readonly wouldRefuse: boolean;
+};
+
 /** Counts requests against limits that all instances share. */
 export type Meter = {
 	consume(
@@ -35,6 +45,18 @@ export type Meter = {
 		rule: MeterRule,
 		cost?: number,
 	): Promise<Result<MeterReading, MeterRefusal>>;
+	/**
+	 * Counts like `consume` but never refuses: a request that `consume` would
+	 * refuse is let through and recorded in the audit as an observation. Use it
+	 * to roll out a new limit: watch how often it would refuse real traffic,
+	 * calibrate the numbers, then swap the call for `consume`. Counting is the
+	 * same as for `consume`, so what is observed is what would be enforced.
+	 */
+	observe(
+		scope: MeterScope,
+		rule: MeterRule,
+		cost?: number,
+	): Promise<MeterObservation>;
 };
 
 /** Options for creating the meter. */
@@ -59,61 +81,97 @@ const isPositiveInteger = (value: number): boolean => {
  * whose limit or window is not a positive integer, or a cost that is not a
  * positive whole number within the limit, is a programming error and throws.
  * A refused request counts nothing; it is refused with the earliest moment it
- * would pass and recorded in the audit; requests within the limit are not recorded, they are the hot path.
- * If the store fails, so does the call: nothing is let through on a guess.
+ * would pass and recorded in the audit, with the reason `capacity` when the
+ * store had no room for the key; requests within the limit are not recorded,
+ * they are the hot path. If the store fails, so does the call: nothing is let
+ * through on a guess.
  */
 export function createMeter(options: MeterOptions): Meter {
 	const { store, audit } = options;
 
+	const decide = async (
+		scope: MeterScope,
+		rule: MeterRule,
+		cost: number,
+	): Promise<MeterStoreResult> => {
+		if (
+			!isPositiveInteger(rule.limit) ||
+			!isPositiveInteger(rule.windowMilliseconds)
+		) {
+			throw new RangeError(
+				"limit and windowMilliseconds must be positive integers",
+			);
+		}
+
+		if (!isPositiveInteger(cost) || cost > rule.limit) {
+			throw new RangeError(
+				"cost must be a positive integer, at most the limit",
+			);
+		}
+
+		return store.consume({
+			key: keyOf(scope),
+			cost,
+			limit: rule.limit,
+			windowMilliseconds: rule.windowMilliseconds,
+		});
+	};
+
+	const record = (
+		outcome: AuditOutcome,
+		scope: MeterScope,
+		rule: MeterRule,
+		answer: MeterStoreResult,
+	) => {
+		return report(audit, {
+			event: AUDIT_EVENTS.meterConsume,
+			outcome,
+			reason:
+				answer.refusedForCapacity === true
+					? AUDIT_REASONS.capacity
+					: AUDIT_REASONS.limitExceeded,
+			tenant: scope.tenant,
+			subject: scope.actor,
+			detail: {
+				resource: scope.resource,
+				limit: String(rule.limit),
+				used: String(answer.used),
+			},
+		});
+	};
+
 	return {
 		async consume(scope, rule, cost = 1) {
-			if (
-				!isPositiveInteger(rule.limit) ||
-				!isPositiveInteger(rule.windowMilliseconds)
-			) {
-				throw new RangeError(
-					"limit and windowMilliseconds must be positive integers",
-				);
-			}
+			const answer = await decide(scope, rule, cost);
 
-			if (!isPositiveInteger(cost) || cost > rule.limit) {
-				throw new RangeError(
-					"cost must be a positive integer, at most the limit",
-				);
-			}
-
-			const outcome = await store.consume({
-				key: keyOf(scope),
-				cost,
-				limit: rule.limit,
-				windowMilliseconds: rule.windowMilliseconds,
-			});
-
-			if (!outcome.allowed) {
-				await report(audit, {
-					event: AUDIT_EVENTS.meterConsume,
-					outcome: AUDIT_OUTCOMES.refusal,
-					reason: AUDIT_REASONS.limitExceeded,
-					tenant: scope.tenant,
-					subject: scope.actor,
-					detail: {
-						resource: scope.resource,
-						limit: String(rule.limit),
-						used: String(outcome.used),
-					},
-				});
+			if (!answer.allowed) {
+				await record(AUDIT_OUTCOMES.refusal, scope, rule, answer);
 
 				return fail({
 					code: ERROR_CODES.rateLimited,
-					resetsAtMilliseconds: outcome.resetsAtMilliseconds,
+					resetsAtMilliseconds: answer.resetsAtMilliseconds,
 				});
 			}
 
 			return succeed({
-				used: outcome.used,
-				remaining: outcome.remaining,
-				resetsAtMilliseconds: outcome.resetsAtMilliseconds,
+				used: answer.used,
+				remaining: answer.remaining,
+				resetsAtMilliseconds: answer.resetsAtMilliseconds,
 			});
+		},
+		async observe(scope, rule, cost = 1) {
+			const answer = await decide(scope, rule, cost);
+
+			if (!answer.allowed) {
+				await record(AUDIT_OUTCOMES.observation, scope, rule, answer);
+			}
+
+			return {
+				wouldRefuse: !answer.allowed,
+				used: answer.used,
+				remaining: answer.remaining,
+				resetsAtMilliseconds: answer.resetsAtMilliseconds,
+			};
 		},
 	};
 }

@@ -16,8 +16,12 @@ export const AUDIT_EVENTS = {
 	tokenIssue: "token.issue",
 } as const;
 
-/** Whether an operation granted what was asked or refused it. */
+/**
+ * Whether an operation granted what was asked, refused it, or only observed
+ * that it would have refused.
+ */
 export const AUDIT_OUTCOMES = {
+	observation: "observation",
 	refusal: "refusal",
 	success: "success",
 } as const;
@@ -32,6 +36,7 @@ export type AuditOutcome = ValueOf<typeof AUDIT_OUTCOMES>;
 export const AUDIT_REASONS = {
 	allowed: "allowed",
 	authorizeError: "authorize-error",
+	capacity: "capacity",
 	consumed: "consumed",
 	deleted: "deleted",
 	emailConfirmed: "email-confirmed",

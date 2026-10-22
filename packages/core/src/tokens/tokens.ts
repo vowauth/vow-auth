@@ -11,6 +11,7 @@ import { fail, type Result, succeed } from "../result.js";
 import { SECRET_LENGTH } from "../shared/constants.js";
 import { own } from "../shared/own.js";
 import { generateSecret, hashSecret } from "../shared/secret.js";
+import { isStoreFullError } from "../store-full.js";
 import type { TokenStore } from "./token-store.js";
 
 /** Options for creating the tokens primitive. */
@@ -40,9 +41,12 @@ export type Tokens = {
  * purpose it was issued for, and only before it expires. A token presented for
  * the wrong purpose is burned, not kept. Every rejection reports the same
  * `invalid-token` error, so a caller cannot learn why a token was refused; the
- * audit records the reason. Issuing and a successful redemption are recorded
- * before they take effect: if the sink throws, no token is issued, and a
- * redemption fails with the token already spent.
+ * audit records the reason. The secret of a new token is handed out only
+ * after the audit has recorded it, so if the sink throws nobody holds a
+ * token; a store with no room refuses with an error that the audit records as
+ * `capacity`. A successful redemption is recorded before its payload is
+ * handed out: if the sink throws, the redemption fails with the token already
+ * spent.
  */
 export function createTokens(options: TokensOptions): Tokens {
 	const audit = own(options, "audit");
@@ -85,20 +89,33 @@ export function createTokens(options: TokensOptions): Tokens {
 				);
 			}
 
+			const token = generateSecret();
+
+			try {
+				await options.store.put(await hashSecret(token), {
+					purpose: input.purpose,
+					payload: own(input, "payload") ?? {},
+					expiresAtMilliseconds: Date.now() + input.timeToLiveMilliseconds,
+				});
+			} catch (error) {
+				if (isStoreFullError(error)) {
+					await record(
+						AUDIT_EVENTS.tokenIssue,
+						AUDIT_OUTCOMES.refusal,
+						AUDIT_REASONS.capacity,
+						input.purpose,
+					);
+				}
+
+				throw error;
+			}
+
 			await record(
 				AUDIT_EVENTS.tokenIssue,
 				AUDIT_OUTCOMES.success,
 				AUDIT_REASONS.issued,
 				input.purpose,
 			);
-
-			const token = generateSecret();
-
-			await options.store.put(await hashSecret(token), {
-				purpose: input.purpose,
-				payload: own(input, "payload") ?? {},
-				expiresAtMilliseconds: Date.now() + input.timeToLiveMilliseconds,
-			});
 
 			return token;
 		},

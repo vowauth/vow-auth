@@ -1,4 +1,4 @@
-import type { EpochStore } from "@vow-auth/core";
+import type { EpochStore, StoreStats } from "@vow-auth/core";
 import { estimateBytes } from "./estimate-bytes.js";
 import { createExpiryOrder } from "./expiry-order.js";
 
@@ -14,6 +14,9 @@ export type MemoryEpochStoreOptions = {
 	readonly maximumBytes: number;
 };
 
+/** The epoch store, with the numbers an operator watches. */
+export type MemoryEpochStore = EpochStore & { stats(): StoreStats };
+
 type Entry = {
 	readonly key: string;
 	readonly stamp: number;
@@ -28,11 +31,13 @@ type Entry = {
  * floor starts at the moment of creation: a key that was never revoked reads
  * as that moment instead of 0, and a restart revokes every token issued before
  * it instead of forgetting revocations. Every operation first evicts expired
- * revocations in O(log n) each.
+ * revocations in O(log n) each. When the budget runs out the store forgets
+ * every live revocation and raises its floor; `stats().evictions` counts them,
+ * and any rise deserves an alert.
  */
 export function createMemoryEpochStore(
 	options: MemoryEpochStoreOptions,
-): EpochStore {
+): MemoryEpochStore {
 	const { maximumBytes } = options;
 
 	if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0) {
@@ -44,6 +49,7 @@ export function createMemoryEpochStore(
 	let floor = Date.now();
 	let highestStamp = floor;
 	let usedBytes = 0;
+	let evictions = 0;
 
 	const remove = (entry: Entry): void => {
 		entries.delete(entry.key);
@@ -66,6 +72,7 @@ export function createMemoryEpochStore(
 	};
 
 	const forgetEverything = (now: number): number => {
+		evictions += entries.size;
 		entries.clear();
 		expiryOrder = createExpiryOrder<Entry>();
 		usedBytes = 0;
@@ -120,6 +127,15 @@ export function createMemoryEpochStore(
 			highestStamp = Math.max(highestStamp, stamp);
 
 			return stamp;
+		},
+		stats() {
+			return {
+				entries: entries.size,
+				usedBytes,
+				maximumBytes,
+				capacityRefusals: 0,
+				evictions,
+			};
 		},
 	};
 }

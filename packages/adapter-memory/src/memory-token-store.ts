@@ -1,4 +1,9 @@
-import type { TokenRecord, TokenStore } from "@vow-auth/core";
+import {
+	type StoreStats,
+	storeFullError,
+	type TokenRecord,
+	type TokenStore,
+} from "@vow-auth/core";
 import { estimateBytes } from "./estimate-bytes.js";
 import { createExpiryOrder } from "./expiry-order.js";
 
@@ -7,11 +12,15 @@ export type MemoryTokenStoreOptions = {
 	/**
 	 * Memory budget in bytes. A record counts as 256 bytes plus 2 bytes per
 	 * character of its hash and of its JSON form, which is above its real size
-	 * in V8. A record that does not fit evicts the oldest records, so a flood
-	 * of issued tokens shortens how long tokens live but never blocks issuing.
+	 * in V8. A record that does not fit after expired records are dropped is
+	 * refused with a store full error; a live record is never dropped to make
+	 * room, so nobody can push another person's pending token out by flooding.
 	 */
 	readonly maximumBytes: number;
 };
+
+/** The token store, with the numbers an operator watches. */
+export type MemoryTokenStore = TokenStore & { stats(): StoreStats };
 
 type Entry = {
 	readonly hash: string;
@@ -19,55 +28,19 @@ type Entry = {
 	readonly expiresAtMilliseconds: number;
 	readonly bytes: number;
 	position: number;
-	older: Entry | undefined;
-	newer: Entry | undefined;
-};
-
-const createInsertionOrder = () => {
-	let oldest: Entry | undefined;
-	let newest: Entry | undefined;
-
-	return {
-		oldest: (): Entry | undefined => oldest,
-		add(entry: Entry): void {
-			entry.older = newest;
-			entry.newer = undefined;
-
-			if (newest === undefined) {
-				oldest = entry;
-			} else {
-				newest.newer = entry;
-			}
-
-			newest = entry;
-		},
-		remove(entry: Entry): void {
-			if (entry.older === undefined) {
-				oldest = entry.newer;
-			} else {
-				entry.older.newer = entry.newer;
-			}
-
-			if (entry.newer === undefined) {
-				newest = entry.older;
-			} else {
-				entry.newer.older = entry.older;
-			}
-		},
-	};
 };
 
 /**
  * In-process token store. Valid only when the same process issues and redeems
  * tokens: one long-lived server, not serverless and not several instances.
  * Records are serialized on write and parsed on read, like a networked store.
- * Every operation first evicts expired records in expiry order; a record that
- * does not fit into `maximumBytes` then evicts the oldest records. Each
- * eviction costs O(log n).
+ * Every operation first drops expired records in expiry order, each in
+ * O(log n). When a record still does not fit, `put` throws a store full error
+ * and nothing is evicted.
  */
 export function createMemoryTokenStore(
 	options: MemoryTokenStoreOptions,
-): TokenStore {
+): MemoryTokenStore {
 	const { maximumBytes } = options;
 
 	if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0) {
@@ -76,13 +49,12 @@ export function createMemoryTokenStore(
 
 	const entries = new Map<string, Entry>();
 	const expiryOrder = createExpiryOrder<Entry>();
-	const insertionOrder = createInsertionOrder();
 	let usedBytes = 0;
+	let capacityRefusals = 0;
 
 	const remove = (entry: Entry): void => {
 		entries.delete(entry.hash);
 		expiryOrder.remove(entry);
-		insertionOrder.remove(entry);
 		usedBytes -= entry.bytes;
 	};
 
@@ -95,16 +67,6 @@ export function createMemoryTokenStore(
 			earliest = expiryOrder.earliest()
 		) {
 			remove(earliest);
-		}
-	};
-
-	const evictOldestUntilFits = (bytes: number): void => {
-		for (
-			let oldest = insertionOrder.oldest();
-			oldest !== undefined && usedBytes + bytes > maximumBytes;
-			oldest = insertionOrder.oldest()
-		) {
-			remove(oldest);
 		}
 	};
 
@@ -124,12 +86,17 @@ export function createMemoryTokenStore(
 			evictExpired();
 
 			const existing = entries.get(hash);
+			const reclaimed = existing?.bytes ?? 0;
+
+			if (usedBytes - reclaimed + bytes > maximumBytes) {
+				capacityRefusals += 1;
+
+				throw storeFullError("The token store has no room for one more record");
+			}
 
 			if (existing !== undefined) {
 				remove(existing);
 			}
-
-			evictOldestUntilFits(bytes);
 
 			const entry: Entry = {
 				hash,
@@ -137,13 +104,10 @@ export function createMemoryTokenStore(
 				expiresAtMilliseconds: record.expiresAtMilliseconds,
 				bytes,
 				position: 0,
-				older: undefined,
-				newer: undefined,
 			};
 
 			entries.set(hash, entry);
 			expiryOrder.add(entry);
-			insertionOrder.add(entry);
 			usedBytes += bytes;
 		},
 		async take(hash) {
@@ -160,6 +124,15 @@ export function createMemoryTokenStore(
 			const record: TokenRecord = JSON.parse(entry.serialized);
 
 			return record;
+		},
+		stats() {
+			return {
+				entries: entries.size,
+				usedBytes,
+				maximumBytes,
+				capacityRefusals,
+				evictions: 0,
+			};
 		},
 	};
 }

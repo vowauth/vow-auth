@@ -49,7 +49,7 @@ tokenStoreContract("memory", {
 	create: () => createMemoryTokenStore({ maximumBytes: BIG }),
 	full: () => ({
 		store: createMemoryTokenStore({ maximumBytes: 2_000 }),
-		policy: "evict-oldest",
+		policy: "refuse-new",
 	}),
 	clock,
 });

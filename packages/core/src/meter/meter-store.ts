@@ -18,7 +18,11 @@ export type MeterReading = {
 };
 
 /** What the store answers: the reading, and whether the cost was counted. */
-export type MeterStoreResult = MeterReading & { readonly allowed: boolean };
+export type MeterStoreResult = MeterReading & {
+	readonly allowed: boolean;
+	/** `true` when the request was refused because the store had no room for the key, not because of the limit. */
+	readonly refusedForCapacity?: true;
+};
 
 /**
  * Storage port for counters shared by every instance. `consume` must be one

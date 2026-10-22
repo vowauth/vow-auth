@@ -1,6 +1,7 @@
 import { createMemoryTokenStore } from "@vow-auth/adapter-memory";
 import {
 	createTokens,
+	isStoreFullError,
 	type TokenRecord,
 	type TokenStore,
 } from "@vow-auth/core/internal";
@@ -110,7 +111,7 @@ const takeAll = async (store: TokenStore, hashes: readonly string[]) => {
 	return present;
 };
 
-test("a full memory store evicts its oldest records instead of refusing new ones", async () => {
+test("a full memory store refuses new records and drops nothing that is alive", async () => {
 	const hashes = Array.from(
 		{ length: 100 },
 		(_, index) => `hash-${String(index).padStart(3, "0")}`,
@@ -118,15 +119,42 @@ test("a full memory store evicts its oldest records instead of refusing new ones
 	const store = createMemoryTokenStore({
 		maximumBytes: 4 * costOf("hash-000", createRecord()) - 1,
 	});
+	const refused: boolean[] = [];
 
 	for (const hash of hashes) {
-		await store.put(hash, createRecord());
+		try {
+			await store.put(hash, createRecord());
+			refused.push(false);
+		} catch (error) {
+			expect(isStoreFullError(error)).toBe(true);
+			refused.push(true);
+		}
 	}
 
+	expect(refused).toEqual([...Array(3).fill(false), ...Array(97).fill(true)]);
 	expect(await takeAll(store, hashes)).toEqual([
-		...Array(97).fill(false),
 		...Array(3).fill(true),
+		...Array(97).fill(false),
 	]);
+	expect(store.stats()).toMatchObject({ capacityRefusals: 97, evictions: 0 });
+});
+
+test("a refused replacement keeps the record that was there", async () => {
+	const store = createMemoryTokenStore({
+		maximumBytes: 2 * costOf("hash-000", createRecord()),
+	});
+
+	await store.put("hash-000", createRecord());
+	await store.put("hash-001", createRecord());
+
+	await expect(
+		store.put("hash-000", {
+			...createRecord(),
+			payload: { filler: "x".repeat(2_000) },
+		}),
+	).rejects.toThrow();
+
+	expect(await takeAll(store, ["hash-000", "hash-001"])).toEqual([true, true]);
 });
 
 test("taking or replacing a record frees its share of the memory budget", async () => {
@@ -149,10 +177,7 @@ test("taking or replacing a record frees its share of the memory budget", async 
 	]);
 });
 
-const checkAgainstModel = async (
-	maximumBytes: number,
-	evictionAllowed: boolean,
-) => {
+const checkAgainstModel = async (maximumBytes: number) => {
 	const hashes = Array.from(
 		{ length: 32 },
 		(_, index) => `hash-${String(index).padStart(2, "0")}`,
@@ -180,24 +205,27 @@ const checkAgainstModel = async (
 				const store = createMemoryTokenStore({ maximumBytes });
 				const model = new Map<string, TokenRecord>();
 
+				const liveBytesWithout = (excluded: string): number => {
+					let bytes = 0;
+
+					for (const [modelHash, record] of model) {
+						if (
+							modelHash !== excluded &&
+							Date.now() < record.expiresAtMilliseconds
+						) {
+							bytes += costOf(modelHash, record);
+						}
+					}
+
+					return bytes;
+				};
+
 				const takeAndCheck = async (takenHash: string) => {
 					const expected = model.get(takenHash);
 					const live =
 						expected !== undefined &&
 						Date.now() < expected.expiresAtMilliseconds;
 					const actual = await store.take(takenHash);
-
-					if (evictionAllowed && live && actual === undefined) {
-						for (const olderHash of model.keys()) {
-							model.delete(olderHash);
-
-							if (olderHash === takenHash) {
-								break;
-							}
-						}
-
-						return undefined;
-					}
 
 					expect(actual).toEqual(live ? expected : undefined);
 					model.delete(takenHash);
@@ -221,9 +249,19 @@ const checkAgainstModel = async (
 						payload: { filler: "x".repeat(step.payloadSize) },
 						expiresAtMilliseconds: Date.now() + step.lifetime,
 					};
-					await store.put(step.hash, record);
-					model.delete(step.hash);
-					model.set(step.hash, record);
+					const fits =
+						liveBytesWithout(step.hash) + costOf(step.hash, record) <=
+						maximumBytes;
+
+					if (fits) {
+						await store.put(step.hash, record);
+						model.delete(step.hash);
+						model.set(step.hash, record);
+					} else {
+						await expect(store.put(step.hash, record)).rejects.toSatisfy(
+							isStoreFullError,
+						);
+					}
 				}
 
 				let presentBytes = 0;
@@ -244,9 +282,9 @@ const checkAgainstModel = async (
 };
 
 test("a roomy memory store keeps exactly its live records under any operation order", async () => {
-	await checkAgainstModel(10_000_000, false);
+	await checkAgainstModel(10_000_000);
 });
 
-test("a cramped memory store evicts only expired records and then the oldest ones", async () => {
-	await checkAgainstModel(4_000, true);
+test("a cramped memory store refuses exactly when its live records leave no room, and drops none", async () => {
+	await checkAgainstModel(4_000);
 });

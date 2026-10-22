@@ -28,6 +28,12 @@ return stamp`;
  * Keys of one chain share the `{tenant}` hash tag, so the store works in
  * Redis Cluster with one round trip per read.
  *
+ * Give epochs an instance of their own, apart from counters and tokens. When
+ * Redis is full with `noeviction`, reads still work and sessions can still be
+ * issued, but a revocation cannot be written; a dedicated instance holds only
+ * revocations, whose number is bounded by the token life time, so nothing else
+ * can starve it. Watch it with `createRedisInstanceStats`.
+ *
  * The deployment must keep revocations: `maxmemory-policy noeviction`, because
  * evicting a revocation revives its tokens, and persistence with AOF; with
  * `appendfsync everysec` a crash forgets up to one second of revocations.

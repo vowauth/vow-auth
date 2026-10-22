@@ -1,6 +1,7 @@
 import {
 	type MeterStore,
 	type SlidingWindowState,
+	type StoreStats,
 	slidingWindow,
 } from "@vow-auth/core";
 import { estimateBytes } from "./estimate-bytes.js";
@@ -16,6 +17,9 @@ export type MemoryMeterStoreOptions = {
 	 */
 	readonly maximumBytes: number;
 };
+
+/** The meter store, with the numbers an operator watches. */
+export type MemoryMeterStore = MeterStore & { stats(): StoreStats };
 
 type Entry = {
 	readonly key: string;
@@ -37,7 +41,7 @@ const expiryOf = (state: SlidingWindowState): number => {
  */
 export function createMemoryMeterStore(
 	options: MemoryMeterStoreOptions,
-): MeterStore {
+): MemoryMeterStore {
 	const { maximumBytes } = options;
 
 	if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0) {
@@ -47,6 +51,7 @@ export function createMemoryMeterStore(
 	const entries = new Map<string, Entry>();
 	const expiryOrder = createExpiryOrder<Entry>();
 	let usedBytes = 0;
+	let capacityRefusals = 0;
 
 	const remove = (entry: Entry): void => {
 		entries.delete(entry.key);
@@ -100,8 +105,11 @@ export function createMemoryMeterStore(
 			const bytes = estimateBytes(input.key.length);
 
 			if (usedBytes + bytes > maximumBytes) {
+				capacityRefusals += 1;
+
 				return {
 					allowed: false,
+					refusedForCapacity: true,
 					used: input.limit,
 					remaining: 0,
 					resetsAtMilliseconds:
@@ -123,6 +131,15 @@ export function createMemoryMeterStore(
 			usedBytes += bytes;
 
 			return { allowed: true, ...report };
+		},
+		stats() {
+			return {
+				entries: entries.size,
+				usedBytes,
+				maximumBytes,
+				capacityRefusals,
+				evictions: 0,
+			};
 		},
 	};
 }

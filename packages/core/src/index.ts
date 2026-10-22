@@ -34,6 +34,7 @@ export {
 } from "./identity/resolve-identity.js";
 export type {
 	Meter,
+	MeterObservation,
 	MeterRefusal,
 	MeterRule,
 	MeterScope,
@@ -90,5 +91,7 @@ export type {
 	SignInPolicyInput,
 	SignInRequest,
 } from "./sign-in.js";
+export { isStoreFullError, storeFullError } from "./store-full.js";
+export type { StoreStats } from "./store-stats.js";
 export type { TokenRecord, TokenStore } from "./tokens/token-store.js";
 export type { IssueTokenInput, Tokens } from "./tokens/tokens.js";
