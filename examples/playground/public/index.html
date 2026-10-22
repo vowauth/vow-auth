@@ -120,13 +120,34 @@ pre { margin: 8px 0 0; padding: 8px; background: var(--background); border-radiu
 
 	<section class="card">
 		<h2>4. Agents (delegation)</h2>
-		<p class="hint">Press <b>Delegate agent</b> in a session row. The agent gets its own token, which is never accepted as a person (try <b>As session</b>). What it may do is kept by the application (<b>may write</b>), not in the token. A delegation tied to the session dies with it; a free one survives sign-out until its delegation, the agent or the person is revoked.</p>
+		<p class="hint">Press <b>Delegate agent</b> in a session row. The agent gets its own token, which is never accepted as a person (try <b>As session</b>). What it may do is decided by an ability that the application narrows from the person's own with <code>narrow</code> (<b>may write</b>) and checks with <code>authorize</code>, not by the token; every verdict is in the audit as <code>authorize.check</code>. A delegation tied to the session dies with it; a free one survives sign-out until its delegation, the agent or the person is revoked.</p>
 		<div class="row">
 			<span>Agent name: <input type="text" id="agent-name" value="mcp-client-7"></span>
 			<label><input type="checkbox" id="agent-bound"> tied to the session</label>
 			<label><input type="checkbox" id="agent-write"> may write notes</label>
 		</div>
 		<table id="agents"><thead><tr><th>Agent</th><th>Delegation</th><th>For</th><th>Tied</th><th>Write</th><th>Alive</th><th>Actions</th></tr></thead><tbody></tbody></table>
+	</section>
+
+	<section class="card">
+		<h2>5. Limits and refusals</h2>
+		<p class="hint">How the rate limit is rolled out, and what happens to input that no store could keep. Nothing here throws: every case is a refusal with a code.</p>
+		<h3>Rate limit of "Send link" (3 per minute per address)</h3>
+		<div class="row">
+			<label><input type="radio" name="rate-mode" value="enforce" checked> enforce (refuse over the limit)</label>
+			<label><input type="radio" name="rate-mode" value="observe"> observe (refuse nothing, only say what it would have done)</label>
+		</div>
+		<p class="hint">Press <b>Send link</b> more than three times in each mode and read the answer and the audit (<code>meter.consume</code> with the outcome <code>observation</code>).</p>
+		<div class="row" id="meter-probes"></div>
+		<h3>Names that no store can keep</h3>
+		<p class="hint">Each button sends a sign-in with one hostile value. A NUL character or a lone surrogate stops at the border, before any store is touched; ordinary Unicode passes.</p>
+		<div class="row" id="hostile-probes"></div>
+		<h3>Where may the browser go after sign-in?</h3>
+		<div class="row"><input type="text" id="redirect-target" placeholder="custom target"><button type="button" id="redirect-custom">Check</button><button type="button" class="primary" id="redirect-all">Check all examples</button></div>
+		<table id="redirects"><thead><tr><th>Target</th><th>Verdict</th><th>Detail</th></tr></thead><tbody></tbody></table>
+		<h3>Where may the application call? (names on the list: hooks.example.com, rebind.example.com that resolves to 10.0.0.5)</h3>
+		<div class="row"><input type="text" id="outbound-target" placeholder="custom URL"><button type="button" id="outbound-custom">Check</button><button type="button" class="primary" id="outbound-all">Check all examples</button></div>
+		<table id="outbounds"><thead><tr><th>URL</th><th>Verdict</th><th>Detail</th></tr></thead><tbody></tbody></table>
 	</section>
 
 	<div class="grid">
@@ -255,6 +276,83 @@ byId("second-submit").addEventListener("click", async () => {
 	}
 	render();
 });
+
+const NUL = String.fromCharCode(0);
+const LONE_SURROGATE = String.fromCharCode(0xd800);
+const providerClaims = (externalId) => JSON.stringify({ provider: "idp", externalId, emailVerified: false });
+const HOSTILE = [
+	["NUL in tenant", { tenant: `acme${NUL}`, device: "laptop", claims: providerClaims("alice") }],
+	["NUL in device", { tenant: "acme", device: `lap${NUL}top`, claims: providerClaims("alice") }],
+	["NUL in external id", { tenant: "acme", device: "laptop", claims: providerClaims(`al${NUL}ice`) }],
+	["Lone surrogate in external id", { tenant: "acme", device: "laptop", claims: providerClaims(`al${LONE_SURROGATE}ice`) }],
+	["Friendly Unicode", { tenant: "acme", device: "Ivan's 👩‍💻 laptop", claims: providerClaims("ivan") }],
+];
+for (const [label, body] of HOSTILE) {
+	const button = element("button", label);
+	button.addEventListener("click", async () => {
+		const result = await post("/api/sign-in/provider", body);
+		show(`sign-in: ${label}`, result.status, result.data);
+		if (result.status === 200) rememberSession(result.data);
+		render();
+	});
+	byId("hostile-probes").append(button);
+}
+
+const METER_PROBES = [
+	["Rule with limit 0", { limit: 0 }],
+	["Rule with limit 1.5", { limit: 1.5 }],
+	["Cost 0", { cost: 0 }],
+	["Cost 1.5", { cost: 1.5 }],
+	["Cost above the limit", { cost: 99 }],
+	["Valid request", { cost: 1 }],
+];
+for (const [label, body] of METER_PROBES) {
+	const button = element("button", label);
+	button.addEventListener("click", async () => {
+		const result = await post("/api/probe/meter", body);
+		show(`meter probe: ${label}`, result.status, result.data);
+		render();
+	});
+	byId("meter-probes").append(button);
+}
+
+const REDIRECTS = [
+	"/dashboard", "http://localhost:3000/after", "https://app.example.com/home?x=1",
+	"//evil.com", "/\\evil.com", "https://evil.com/", "https://app.example.com@evil.com/", "https://app.example.com.evil.com/",
+	"http://app.example.com/", "javascript:alert(1)", "https://user:pw@app.example.com/", `/${String.fromCharCode(0x202e)}/evil`,
+];
+const OUTBOUNDS = [
+	"https://hooks.example.com/in", "http://hooks.example.com/in", "https://hooks.example.com:8443/in", "https://127.0.0.1/",
+	"https://169.254.169.254/latest/meta-data/", "https://sub.hooks.example.com/", "https://rebind.example.com/in",
+	"https://user:pw@hooks.example.com/", "https://hooks.example.com@evil.com/", "file:///etc/passwd",
+];
+const probeTable = async (tableId, endpoint, key, targets) => {
+	const body = byId(tableId).tBodies[0];
+	for (const target of targets) {
+		const result = await post(endpoint, { [key]: target });
+		const row = element("tr");
+		row.append(
+			element("td", target, "mono"),
+			element("td", result.data.ok ? "allowed" : "refused", result.data.ok ? "good" : "bad"),
+			element("td", result.data.ok ? (result.data.to ?? `calls ${result.data.called} with redirect: ${result.data.redirect}`) : result.data.error),
+		);
+		body.append(row);
+	}
+};
+const runProbe = async (tableId, endpoint, key, targets) => {
+	byId(tableId).tBodies[0].replaceChildren();
+	await probeTable(tableId, endpoint, key, targets);
+};
+byId("redirect-all").addEventListener("click", () => runProbe("redirects", "/api/probe/redirect", "target", REDIRECTS));
+byId("redirect-custom").addEventListener("click", () => probeTable("redirects", "/api/probe/redirect", "target", [byId("redirect-target").value]));
+byId("outbound-all").addEventListener("click", () => runProbe("outbounds", "/api/probe/outbound", "url", OUTBOUNDS));
+byId("outbound-custom").addEventListener("click", () => probeTable("outbounds", "/api/probe/outbound", "url", [byId("outbound-target").value]));
+
+for (const radio of document.querySelectorAll('input[name="rate-mode"]')) {
+	radio.addEventListener("change", async (event) => {
+		await post("/api/settings", { rateLimitMode: event.target.value });
+	});
+}
 
 byId("provider-down").addEventListener("change", async (event) => {
 	await post("/api/settings", { mailProviderDown: event.target.checked });
@@ -406,6 +504,9 @@ const render = async () => {
 	renderSessions();
 	renderAgents(state);
 	byId("provider-down").checked = state.settings.mailProviderDown;
+	for (const radio of document.querySelectorAll('input[name="rate-mode"]')) {
+		radio.checked = radio.value === state.settings.rateLimitMode;
+	}
 	byId("outbox-stats").textContent = `Outbox: ${state.outbox.pending} pending, ${state.outbox.buried} buried.`;
 
 	const inbox = byId("inbox").tBodies[0];

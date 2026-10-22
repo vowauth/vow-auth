@@ -314,3 +314,38 @@ test("revoking a level ends exactly the agents below it", async () => {
 	await call(playground, "/api/revoke", { scope: "user" }, fresh.token);
 	expect(await alive()).toEqual([]);
 });
+
+test("polling the state does not keep verifying a revoked agent, so the audit does not fill with refusals", async () => {
+	const playground = await createPlayground();
+	const alice = await signIn(playground, "alice@example.com");
+	const agent = await delegate(playground, alice.token, "mcp-1");
+	const refusalsOf = async () =>
+		(await stateOf(playground)).audit.filter(
+			(entry: { event: string; outcome: string; detail: string }) =>
+				entry.event === "session.verify" &&
+				entry.outcome === "refusal" &&
+				entry.detail.includes(agent.delegation),
+		).length;
+
+	expect(await refusalsOf()).toBe(0);
+
+	await call(
+		playground,
+		"/api/revoke",
+		{ scope: "delegation", id: agent.delegation },
+		alice.token,
+	);
+
+	for (let poll = 0; poll < 3; poll += 1) {
+		await call(playground, "/api/state");
+	}
+
+	const settled = await refusalsOf();
+
+	for (let poll = 0; poll < 6; poll += 1) {
+		await call(playground, "/api/state");
+	}
+
+	expect(settled).toBeLessThanOrEqual(1);
+	expect(await refusalsOf()).toBe(settled);
+});

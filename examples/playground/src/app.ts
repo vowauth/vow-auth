@@ -1,11 +1,19 @@
 import { readFile } from "node:fs/promises";
 import {
+	type Ability,
+	buildAbility,
+	createRules,
+	defineAbilities,
+	shape,
+} from "@vetojs/core";
+import {
 	createMemoryEpochStore,
 	createMemoryIdentityStore,
 	createMemoryMeterStore,
 	createMemoryOutboxStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
+import { authorize, narrow } from "@vow-auth/authorize";
 import {
 	AUDIT_OUTCOMES,
 	type AuditOutcome,
@@ -13,7 +21,9 @@ import {
 	canonicalizeEmail,
 	createAuth,
 	createEmit,
+	createOutboundGuard,
 	createOutboxWorker,
+	createRedirectPolicy,
 	defineDuration,
 	defineMeterRule,
 	type Factor,
@@ -59,6 +69,33 @@ const linkTimeToLive = definedLinkTimeToLive.value;
 const linkRequestRule = definedLinkRequestRule.value;
 const SECRET_BYTES = 32;
 
+const abilities = defineAbilities({
+	resources: {
+		note: { schema: shape<{ authorId: string }>(), actions: ["read", "write"] },
+	},
+});
+const { allow, deny } = createRules(abilities);
+const personAbility = buildAbility(abilities, [
+	allow("read", "note"),
+	allow("write", "note"),
+]);
+
+type NoteAbility = Ability<typeof abilities>;
+
+const redirectPolicy = createRedirectPolicy({
+	allowedOrigins: ["http://localhost:3000", "https://app.example.com"],
+});
+const SIMULATED_DNS: Readonly<Record<string, readonly string[]>> = {
+	"hooks.example.com": ["93.184.216.34"],
+	"rebind.example.com": ["10.0.0.5"],
+};
+const outboundGuard = createOutboundGuard({
+	allowedHosts: Object.keys(SIMULATED_DNS),
+	resolveAddresses: async (host) => SIMULATED_DNS[host] ?? [],
+	fetch: async (input, init) =>
+		Response.json({ called: String(input), redirect: init?.redirect }),
+});
+
 type AuditEntry = {
 	readonly id: string;
 	readonly at: string;
@@ -93,6 +130,7 @@ type Delegated = {
 	readonly boundToSession: boolean;
 	readonly canWrite: boolean;
 	readonly token: string;
+	readonly ability: NoteAbility;
 };
 
 /** The playground: the whole auth stack on in-memory adapters, behind a Fetch handler. */
@@ -154,13 +192,17 @@ const describeDetail = (detail: Readonly<Record<string, string>>): string => {
 
 /** Creates a playground with empty state. */
 export async function createPlayground(): Promise<Playground> {
-	const settings = { mailProviderDown: false };
+	const settings: {
+		mailProviderDown: boolean;
+		rateLimitMode: "enforce" | "observe";
+	} = { mailProviderDown: false, rateLimitMode: "enforce" };
 	const auditLog: AuditEntry[] = [];
 	const mails: Mail[] = [];
 	const subjects = new Map<string, { tenant: string; emails: Set<string> }>();
 	const bannedSubjects = new Set<string>();
 	const secondFactorSubjects = new Set<string>();
 	const delegations = new Map<string, Delegated>();
+	const deadDelegations = new Set<string>();
 	const notes = new Map<string, string[]>();
 
 	const outbox = createMemoryOutboxStore();
@@ -299,6 +341,20 @@ export async function createPlayground(): Promise<Playground> {
 		maximumAttempts: 5,
 	});
 
+	const isAlive = async (delegated: Delegated): Promise<boolean> => {
+		if (deadDelegations.has(delegated.delegation)) {
+			return false;
+		}
+
+		const verified = await auth.agents.verify(delegated.token);
+
+		if (!verified.ok) {
+			deadDelegations.add(delegated.delegation);
+		}
+
+		return verified.ok;
+	};
+
 	const runSignIn = auth.signIn;
 
 	const statusOf = (error: string): number => {
@@ -432,7 +488,7 @@ export async function createPlayground(): Promise<Playground> {
 					subject: delegated.subject,
 					boundToSession: delegated.boundToSession,
 					canWrite: delegated.canWrite,
-					alive: (await auth.agents.verify(delegated.token)).ok,
+					alive: await isAlive(delegated),
 				})),
 			);
 
@@ -457,17 +513,23 @@ export async function createPlayground(): Promise<Playground> {
 				const tenant = text(body, "tenant");
 				const email = text(body, "email");
 				const address = canonicalizeEmail(email);
-				const allowance =
+				const scope =
 					address === undefined
 						? undefined
-						: await auth.meter.consume(
-								{
-									tenant,
-									actor: address.address,
-									resource: "email-link.challenge",
-								},
-								linkRequestRule,
-							);
+						: {
+								tenant,
+								actor: address.address,
+								resource: "email-link.challenge",
+							};
+				const observing = settings.rateLimitMode === "observe";
+				const observation =
+					scope !== undefined && observing
+						? await auth.meter.observe(scope, linkRequestRule)
+						: undefined;
+				const allowance =
+					scope === undefined || observing
+						? undefined
+						: await auth.meter.consume(scope, linkRequestRule);
 
 				if (allowance !== undefined && !allowance.ok) {
 					return allowance.error.code === "rate-limited"
@@ -493,7 +555,20 @@ export async function createPlayground(): Promise<Playground> {
 
 				return respond(
 					result.ok ? 200 : 422,
-					result.ok ? { ok: true } : { error: result.error },
+					result.ok
+						? {
+								ok: true,
+								...(observation?.ok
+									? {
+											observed: {
+												wouldRefuse: observation.value.wouldRefuse,
+												used: observation.value.used,
+												remaining: observation.value.remaining,
+											},
+										}
+									: {}),
+							}
+						: { error: result.error },
 				);
 			}
 			case "/api/sign-in/email-link":
@@ -623,9 +698,25 @@ export async function createPlayground(): Promise<Playground> {
 					return respond(401, { error: verified.error });
 				}
 
+				const personAction =
+					text(body, "action") === "write" ? "write" : "read";
+				const personAllowed = await authorize(
+					personAbility,
+					{ action: personAction, resource: "note" },
+					{
+						tenant: verified.value.tenant,
+						subject: verified.value.subject,
+						audit,
+					},
+				);
+
+				if (!personAllowed.ok) {
+					return respond(403, { error: "forbidden" });
+				}
+
 				const list = notes.get(verified.value.subject) ?? [];
 
-				if (text(body, "action") === "write") {
+				if (personAction === "write") {
 					list.push(`person: ${text(body, "text")}`);
 					notes.set(verified.value.subject, list);
 				}
@@ -642,14 +733,21 @@ export async function createPlayground(): Promise<Playground> {
 				const agent = text(body, "agent");
 				const boundToSession = field(body, "boundToSession") === true;
 				const canWrite = field(body, "canWrite") === true;
+				const narrowed = narrow(
+					abilities,
+					personAbility,
+					canWrite ? [] : [deny("write", "note")],
+				);
 				const delegated = await auth.agents.delegate(bearerToken(request), {
 					agent,
 					timeToLive: agentTimeToLive,
 					boundToSession,
 				});
 
-				if (!delegated.ok) {
-					return respond(422, { error: delegated.error });
+				if (!delegated.ok || !narrowed.ok) {
+					return respond(422, {
+						error: delegated.ok ? "invalid-delegation" : delegated.error,
+					});
 				}
 
 				delegations.set(delegated.value.delegation, {
@@ -660,6 +758,7 @@ export async function createPlayground(): Promise<Playground> {
 					boundToSession,
 					canWrite,
 					token: delegated.value.token,
+					ability: narrowed.value,
 				});
 
 				return respond(200, {
@@ -679,21 +778,21 @@ export async function createPlayground(): Promise<Playground> {
 				}
 
 				const rights = delegations.get(verified.value.delegation);
-				const action = text(body, "action");
+				const action = text(body, "action") === "write" ? "write" : "read";
+				const allowed = await authorize(
+					rights?.ability ?? buildAbility(abilities, []),
+					{ action, resource: "note" },
+					{
+						tenant: verified.value.tenant,
+						subject: verified.value.subject,
+						audit,
+					},
+				);
 
-				if (action === "write" && rights?.canWrite !== true) {
-					await record(
-						"app.agent-act",
-						AUDIT_OUTCOMES.refusal,
-						"forbidden",
-						verified.value.tenant,
-						verified.value.subject,
-						{ agent: verified.value.agent, action },
-					);
-
+				if (!allowed.ok) {
 					return respond(403, {
 						error: "forbidden",
-						why: "this delegation does not allow writing; the right lives in the application, not in the token",
+						why: "the delegation's ability, built with narrow from the person's own, does not allow this; the right lives in the application, not in the token",
 					});
 				}
 
@@ -742,17 +841,73 @@ export async function createPlayground(): Promise<Playground> {
 				return respond(200, { ok: true, revoked: level.value.scope });
 			}
 			case "/api/settings": {
-				settings.mailProviderDown = field(body, "mailProviderDown") === true;
+				if (field(body, "mailProviderDown") !== undefined) {
+					settings.mailProviderDown = field(body, "mailProviderDown") === true;
+				}
+
+				if (field(body, "rateLimitMode") !== undefined) {
+					settings.rateLimitMode =
+						field(body, "rateLimitMode") === "observe" ? "observe" : "enforce";
+				}
+
 				await record(
 					"app.settings",
 					AUDIT_OUTCOMES.success,
 					"changed",
 					"",
 					"",
-					{ mailProviderDown: String(settings.mailProviderDown) },
+					{
+						mailProviderDown: String(settings.mailProviderDown),
+						rateLimitMode: settings.rateLimitMode,
+					},
 				);
 
 				return respond(200, settings);
+			}
+			case "/api/probe/meter": {
+				const limit = Number(field(body, "limit") ?? LINK_REQUESTS_PER_WINDOW);
+				const windowMilliseconds = Number(
+					field(body, "windowMilliseconds") ?? LINK_REQUEST_WINDOW_MILLISECONDS,
+				);
+				const cost = field(body, "cost");
+				const rule = defineMeterRule({ limit, windowMilliseconds });
+
+				if (!rule.ok) {
+					return respond(200, { defined: false, error: rule.error });
+				}
+
+				const consumed = await auth.meter.consume(
+					{ tenant: "probe", actor: "probe", resource: "probe" },
+					rule.value,
+					typeof cost === "number" ? cost : undefined,
+				);
+
+				return respond(
+					200,
+					consumed.ok
+						? { defined: true, ok: true, ...consumed.value }
+						: { defined: true, ok: false, error: consumed.error },
+				);
+			}
+			case "/api/probe/redirect": {
+				const checked = redirectPolicy(field(body, "target"));
+
+				return respond(
+					200,
+					checked.ok
+						? { ok: true, to: checked.value }
+						: { ok: false, error: checked.error },
+				);
+			}
+			case "/api/probe/outbound": {
+				const called = await outboundGuard.fetch(field(body, "url"));
+
+				return respond(
+					200,
+					called.ok
+						? { ok: true, ...(await called.value.json()) }
+						: { ok: false, error: called.error },
+				);
 			}
 			case "/api/delete-subject": {
 				const subject = text(body, "subject");

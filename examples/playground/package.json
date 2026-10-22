@@ -9,7 +9,9 @@
 		"typecheck": "tsc -p tsconfig.json --noEmit"
 	},
 	"dependencies": {
+		"@vetojs/core": "^1.2.0",
 		"@vow-auth/adapter-memory": "workspace:*",
+		"@vow-auth/authorize": "workspace:*",
 		"@vow-auth/core": "workspace:*",
 		"@vow-auth/factor-email-link": "workspace:*"
 	}
