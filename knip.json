@@ -15,6 +15,10 @@
 		"packages/test-support": {},
 		"packages/doctor": {
 			"entry": ["tests/**/*.test.ts", "tests/fixtures/*.ts"]
+		},
+		"examples/flow-map": {
+			"entry": ["app.js", "tests/**/*.test.ts"],
+			"ignore": ["build.d.mts"]
 		}
 	}
 }
