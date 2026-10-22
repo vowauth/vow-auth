@@ -11,6 +11,7 @@ import { fail, type Result, succeed } from "../result.js";
 import type { Sealer } from "../sealer.js";
 import { isBornSession, type Session } from "../session.js";
 import { isPlainObject } from "../shared/is-plain-object.js";
+import { isStorableText } from "../shared/is-storable-text.js";
 import { own } from "../shared/own.js";
 import { safeParseJson } from "../shared/safe-parse-json.js";
 import { generateSecret } from "../shared/secret.js";
@@ -522,8 +523,7 @@ export function createSessionTokens(
 			const timeToLive = own(input, "timeToLive");
 
 			if (
-				typeof agent !== "string" ||
-				agent === "" ||
+				!isStorableText(agent) ||
 				!isDuration(timeToLive) ||
 				timeToLive.milliseconds > maximumLifeTimeMilliseconds
 			) {

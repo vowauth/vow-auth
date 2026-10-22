@@ -13,6 +13,7 @@ import {
 import { fail, type Result, succeed } from "./result.js";
 import { isNonEmptyString } from "./shared/is-non-empty-string.js";
 import { isPlainObject } from "./shared/is-plain-object.js";
+import { isStorableText } from "./shared/is-storable-text.js";
 import { createMintRegistry } from "./shared/mint-registry.js";
 import { own } from "./shared/own.js";
 import { safeParseJson } from "./shared/safe-parse-json.js";
@@ -90,8 +91,9 @@ const parseClaims = (raw: unknown): Result<IdentityClaims, string> => {
 	const emailVerified = own(raw, "emailVerified");
 
 	if (
-		!isNonEmptyString(provider) ||
+		!isStorableText(provider) ||
 		!isNonEmptyString(claimedExternalId) ||
+		(provider !== EMAIL_PROVIDER && !isStorableText(claimedExternalId)) ||
 		typeof emailVerified !== "boolean" ||
 		(claimedEmail !== undefined && !isNonEmptyString(claimedEmail)) ||
 		(provider === EMAIL_PROVIDER && claimedEmail === undefined)

@@ -1,7 +1,7 @@
 import { ERROR_CODES } from "../errors.js";
 import { fail, type Result, succeed } from "../result.js";
-import { isNonEmptyString } from "../shared/is-non-empty-string.js";
 import { isPlainObject } from "../shared/is-plain-object.js";
+import { isStorableText } from "../shared/is-storable-text.js";
 import { own } from "../shared/own.js";
 import type { DomainEvent, OutboxStore } from "./outbox-store.js";
 
@@ -26,7 +26,7 @@ const parseEvent = (raw: unknown): ParsedEvent | undefined => {
 	const type = own(raw, "type");
 	const payload = own(raw, "payload") ?? {};
 
-	if (!isNonEmptyString(type) || !isPlainObject(payload)) {
+	if (!isStorableText(type) || !isPlainObject(payload)) {
 		return undefined;
 	}
 

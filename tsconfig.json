@@ -8,6 +8,9 @@
 			"@vow-auth/adapter-memory": ["./packages/adapter-memory/src/index.ts"],
 			"@vow-auth/adapter-redis": ["./packages/adapter-redis/src/index.ts"],
 			"@vow-auth/doctor": ["./packages/doctor/src/index.ts"],
+			"@vow-auth/adapter-postgres": [
+				"./packages/adapter-postgres/src/index.ts"
+			],
 			"@vow-auth/service": ["./packages/service/src/index.ts"],
 			"@vow-auth/store-contracts": ["./packages/store-contracts/src/index.ts"],
 			"@vow-auth/authorize": ["./packages/authorize/src/index.ts"],

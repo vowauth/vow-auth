@@ -33,6 +33,10 @@ export function createMemoryOutboxStore(): MemoryOutboxStore {
 
 	return {
 		async append(record) {
+			if (entries.has(record.id)) {
+				return;
+			}
+
 			entries.set(record.id, {
 				id: record.id,
 				type: record.type,

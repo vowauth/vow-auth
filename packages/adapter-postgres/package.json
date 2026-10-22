@@ -1,0 +1,28 @@
+{
+	"name": "@vow-auth/adapter-postgres",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"license": "MIT",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"build": "tsc -p tsconfig.json"
+	},
+	"peerDependencies": {
+		"@vow-auth/core": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/pg": "^8.23.1",
+		"@vow-auth/core": "workspace:*",
+		"@vow-auth/store-contracts": "workspace:*",
+		"pg": "^8.23.1"
+	}
+}

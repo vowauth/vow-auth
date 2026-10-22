@@ -26,6 +26,7 @@ import { fail, type Result, succeed } from "./result.js";
 import { issueSession } from "./session.js";
 import type { SessionTokens } from "./session-tokens/session-tokens.js";
 import { isNonEmptyString } from "./shared/is-non-empty-string.js";
+import { isStorableText } from "./shared/is-storable-text.js";
 import { own } from "./shared/own.js";
 import { safeParseJson } from "./shared/safe-parse-json.js";
 import type { Tokens } from "./tokens/tokens.js";
@@ -416,9 +417,9 @@ export function createSignIn(options: SignInOptions): SignIn {
 		const continuation = own(request, "continuation");
 
 		if (
-			!isNonEmptyString(tenant) ||
-			!isNonEmptyString(device) ||
-			(continuation !== undefined && !isNonEmptyString(continuation))
+			!isStorableText(tenant) ||
+			!isStorableText(device) ||
+			(continuation !== undefined && !isStorableText(continuation))
 		) {
 			return fail(ERROR_CODES.invalidRequest);
 		}

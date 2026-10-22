@@ -13,6 +13,7 @@ import {
 	REVOCATION_SCOPES,
 	type SessionTokens,
 } from "../session-tokens/session-tokens.js";
+import { isStorableText } from "../shared/is-storable-text.js";
 import type { ValueOf } from "../shared/value-of.js";
 import type { IdentityStore } from "./identity-store.js";
 
@@ -116,6 +117,16 @@ export function createMutateIdentity(
 	};
 
 	return async (tenant, subject, change) => {
+		if (!isStorableText(tenant) || !isStorableText(subject)) {
+			return refuse(
+				AUDIT_REASONS.malformed,
+				ERROR_CODES.invalidRequest,
+				"",
+				"",
+				change.type,
+			);
+		}
+
 		if (change.type === IDENTITY_CHANGE_TYPES.delete) {
 			await revokeUser(tenant, subject);
 

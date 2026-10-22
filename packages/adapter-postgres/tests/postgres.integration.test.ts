@@ -1,0 +1,270 @@
+import {
+	createMemoryEpochStore,
+	createMemoryMeterStore,
+} from "@vow-auth/adapter-memory";
+import {
+	createPostgresIdentityStore,
+	createPostgresOutboxStore,
+	createPostgresSchema,
+	createPostgresTokenStore,
+	POSTGRES_SCHEMA,
+	type PostgresRunner,
+} from "@vow-auth/adapter-postgres";
+import { createAuth, type Factor, succeed } from "@vow-auth/core";
+import { runDoctor } from "@vow-auth/doctor";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
+
+const databaseUrl = process.env.VOW_AUTH_POSTGRES_URL;
+const HOUR = 3_600_000;
+
+describe.runIf(databaseUrl !== undefined)("postgres specifics", () => {
+	const SCHEMA = "vow_test_specifics";
+	const admin = new pg.Pool({ connectionString: databaseUrl, max: 1 });
+	const pool = new pg.Pool({
+		connectionString: databaseUrl,
+		max: 40,
+		options: `-c search_path=${SCHEMA}`,
+	});
+
+	const run: PostgresRunner = async (text, parameters) => {
+		const result = await pool.query(text, [...parameters]);
+
+		return result.rows;
+	};
+
+	const runIn =
+		(client: pg.PoolClient): PostgresRunner =>
+		async (text, parameters) => {
+			const result = await client.query(text, [...parameters]);
+
+			return result.rows;
+		};
+
+	beforeAll(async () => {
+		await admin.query(`create schema if not exists ${SCHEMA}`);
+		await createPostgresSchema(run);
+	});
+
+	afterAll(async () => {
+		await pool.end();
+		await admin.end();
+	});
+
+	test("the schema can be created again and again", async () => {
+		await createPostgresSchema(run);
+		await createPostgresSchema(run);
+	});
+
+	test("the schema text works as a migration in a schema of its own", async () => {
+		const client = await pool.connect();
+
+		try {
+			await client.query("create schema vow_schema_probe");
+			await client.query("set search_path to vow_schema_probe");
+			await client.query(POSTGRES_SCHEMA);
+
+			const tables = await client.query(
+				"select table_name from information_schema.tables where table_schema = 'vow_schema_probe' order by table_name",
+			);
+
+			expect(tables.rows.map((row) => row.table_name)).toEqual([
+				"vow_auth_identities",
+				"vow_auth_outbox",
+				"vow_auth_outbox_buried",
+				"vow_auth_tokens",
+			]);
+		} finally {
+			await client.query("set search_path to public");
+			await client.query("drop schema vow_schema_probe cascade");
+			client.release();
+		}
+	});
+
+	test("an event appended in a transaction exists only if the transaction commits", async () => {
+		await pool.query("truncate vow_auth_outbox");
+
+		const worker = createPostgresOutboxStore(run);
+		const event = (name: string) => ({
+			id: `${name}-${crypto.randomUUID()}`,
+			type: "mail",
+			payload: { to: "a@example.com" },
+		});
+		const rolledBack = event("rolled-back");
+		const committed = event("committed");
+
+		for (const [appended, ending] of [
+			[rolledBack, "rollback"],
+			[committed, "commit"],
+		] as const) {
+			const client = await pool.connect();
+
+			try {
+				await client.query("begin");
+				await createPostgresOutboxStore(runIn(client)).append(appended);
+
+				expect(
+					await worker.claim({ limit: 10, leaseMilliseconds: HOUR }),
+				).toEqual(ending === "commit" ? [] : []);
+
+				await client.query(ending);
+			} finally {
+				client.release();
+			}
+		}
+
+		const claimed = await worker.claim({ limit: 10, leaseMilliseconds: HOUR });
+
+		expect(claimed.map((record) => record.id)).toEqual([committed.id]);
+	});
+
+	test("a buried event is kept apart for inspection", async () => {
+		await pool.query("truncate vow_auth_outbox, vow_auth_outbox_buried");
+
+		const store = createPostgresOutboxStore(run);
+		const id = `buried-${crypto.randomUUID()}`;
+
+		await store.append({ id, type: "mail", payload: { to: "a@example.com" } });
+
+		const [record] = await store.claim({ limit: 1, leaseMilliseconds: HOUR });
+
+		if (record === undefined) {
+			throw new Error("the event must be claimed");
+		}
+
+		await store.bury(record);
+
+		const buried = await pool.query(
+			"select id, attempts from vow_auth_outbox_buried",
+		);
+
+		expect(buried.rows).toEqual([{ id, attempts: 1 }]);
+		expect(await store.claim({ limit: 1, leaseMilliseconds: HOUR })).toEqual(
+			[],
+		);
+	});
+
+	test("purging removes the expired tokens by the server's clock and keeps the rest", async () => {
+		const store = createPostgresTokenStore(run);
+		const now = Date.now();
+		const expired = `expired-${crypto.randomUUID()}`;
+		const living = `living-${crypto.randomUUID()}`;
+
+		await store.put(expired, {
+			purpose: "email-link",
+			payload: { email: "a@example.com" },
+			expiresAtMilliseconds: now - HOUR,
+		});
+		await store.put(living, {
+			purpose: "email-link",
+			payload: { email: "a@example.com" },
+			expiresAtMilliseconds: now + HOUR,
+		});
+
+		expect(await store.purgeExpired()).toBeGreaterThanOrEqual(1);
+		expect(await store.take(expired)).toBeUndefined();
+		expect(await store.take(living)).toMatchObject({ purpose: "email-link" });
+	});
+
+	test("a token with an awkward payload comes back as it went in", async () => {
+		const store = createPostgresTokenStore(run);
+		const hash = `awkward-${crypto.randomUUID()}`;
+		const payload = {
+			'quote"key': "it's \\ a 'test' \u0000-free",
+			emoji: "🙂",
+			empty: "",
+			__proto__: "kept as a key",
+		};
+
+		await store.put(hash, {
+			purpose: "p",
+			payload,
+			expiresAtMilliseconds: Date.now() + HOUR,
+		});
+
+		expect((await store.take(hash))?.payload).toEqual(payload);
+	});
+
+	test("a sign in with a name the database cannot hold is a refusal, never a database error", async () => {
+		const auth = createAuth({
+			identities: createPostgresIdentityStore(run),
+			tokenStore: createPostgresTokenStore(run),
+			epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
+			meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
+			secrets: [
+				{ version: 1, value: "postgres-secret-0123456789abcdefghijkl" },
+			],
+			maximumLifeTimeMilliseconds: HOUR,
+			sessionTimeToLiveMilliseconds: HOUR,
+			policy: () => "allow",
+			audit: async () => undefined,
+		});
+		const factorFor = (externalId: string): Factor => ({
+			id: "idp",
+			strength: "possession",
+			verify: async () =>
+				succeed({ provider: "idp", externalId, emailVerified: false }),
+		});
+		const NUL = String.fromCharCode(0);
+		const LONE_SURROGATE = String.fromCharCode(0xd800);
+		const attempts = [
+			{ tenant: `acme${NUL}`, device: "laptop", externalId: "alice" },
+			{ tenant: "acme", device: `lap${NUL}top`, externalId: "alice" },
+			{ tenant: "acme", device: "laptop", externalId: `al${NUL}ice` },
+			{
+				tenant: "acme",
+				device: "laptop",
+				externalId: `al${LONE_SURROGATE}ice`,
+			},
+		];
+
+		for (const { tenant, device, externalId } of attempts) {
+			const result = await auth.signIn({
+				tenant,
+				device,
+				factor: factorFor(externalId),
+				response: {},
+			});
+
+			expect(result.ok, JSON.stringify({ tenant, device, externalId })).toBe(
+				false,
+			);
+		}
+
+		expect(
+			(
+				await auth.signIn({
+					tenant: "acme",
+					device: "Ivan's 👩‍💻 laptop",
+					factor: factorFor("alice"),
+					response: {},
+				})
+			).ok,
+		).toBe(true);
+	});
+
+	test("the doctor finds nothing wrong with the Postgres stores", async () => {
+		const report = await runDoctor({
+			options: {
+				identities: createPostgresIdentityStore(run),
+				tokenStore: createPostgresTokenStore(run),
+				epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
+				meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
+				secrets: [
+					{
+						version: 1,
+						value: Buffer.from(
+							crypto.getRandomValues(new Uint8Array(32)),
+						).toString("base64"),
+					},
+				],
+				maximumLifeTimeMilliseconds: HOUR,
+				sessionTimeToLiveMilliseconds: HOUR,
+				policy: () => "deny",
+				audit: async () => undefined,
+			},
+		});
+
+		expect(report.findings).toEqual([]);
+	});
+});

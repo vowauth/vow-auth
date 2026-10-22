@@ -6,9 +6,14 @@ import type { StoreClock } from "./store-clock.js";
 export type OutboxStoreContractOptions = {
 	readonly create: () => OutboxStore | Promise<OutboxStore>;
 	readonly clock: StoreClock;
+	/**
+	 * The lease the tests claim with, and the unit of every wait. A store that
+	 * reads a clock that cannot be controlled sets it small, so waiting is short.
+	 */
+	readonly leaseMilliseconds?: number;
 };
 
-const LEASE = 10_000;
+const DEFAULT_LEASE_MILLISECONDS = 10_000;
 
 const event = (name: string) => ({
 	id: `${name}-${crypto.randomUUID()}`,
@@ -27,6 +32,7 @@ export function outboxStoreContract(
 	options: OutboxStoreContractOptions,
 ): void {
 	const { clock } = options;
+	const LEASE = options.leaseMilliseconds ?? DEFAULT_LEASE_MILLISECONDS;
 
 	describe(`${name}: the outbox store contract`, () => {
 		test("a claim returns the event with its first attempt and the payload it was given", async () => {
@@ -38,6 +44,26 @@ export function outboxStoreContract(
 			expect(
 				await store.claim({ limit: 10, leaseMilliseconds: LEASE }),
 			).toEqual([{ ...appended, attempts: 1 }]);
+		});
+
+		test("appending an id that is already there changes nothing", async () => {
+			const store = await options.create();
+			const appended = event("again");
+
+			await store.append(appended);
+
+			const [claimed] = await store.claim({
+				limit: 1,
+				leaseMilliseconds: LEASE,
+			});
+
+			await store.append({ ...appended, payload: { to: "other@example.com" } });
+			await clock.advance(LEASE * 2);
+
+			const [again] = await store.claim({ limit: 5, leaseMilliseconds: LEASE });
+
+			expect(claimed?.attempts).toBe(1);
+			expect(again).toEqual({ ...appended, attempts: 2 });
 		});
 
 		test("a claim takes no more than its limit and an empty outbox gives nothing", async () => {
@@ -129,14 +155,14 @@ export function outboxStoreContract(
 				throw new Error("the event must be claimed");
 			}
 
-			await store.release(record, 5_000);
-			await clock.advance(2_000);
+			await store.release(record, LEASE / 2);
+			await clock.advance(LEASE / 5);
 
 			expect(await store.claim({ limit: 1, leaseMilliseconds: LEASE })).toEqual(
 				[],
 			);
 
-			await clock.advance(5_000);
+			await clock.advance(LEASE / 2);
 
 			const [again] = await store.claim({ limit: 1, leaseMilliseconds: LEASE });
 

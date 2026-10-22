@@ -149,6 +149,46 @@ export function identityStoreContract(
 			).toBe(first.subjectId);
 		});
 
+		test("when the owner of a verified email is deleted the next verified owner, in order of arrival, is found", async () => {
+			const store = await options.create();
+			const tenant = uniqueTenant();
+			const email = emailOf("shared@example.com");
+			const first = await store.createSubject(
+				tenant,
+				verified("email", "one", "shared@example.com"),
+			);
+			const second = await store.createSubject(
+				tenant,
+				verified("google", "two", "shared@example.com"),
+			);
+			const third = await store.createSubject(
+				tenant,
+				verified("github", "three", "shared@example.com"),
+			);
+
+			expect(await store.findSubjectByVerifiedEmail(tenant, email)).toBe(
+				first.subjectId,
+			);
+
+			await store.deleteSubject(tenant, first.subjectId);
+
+			expect(await store.findSubjectByVerifiedEmail(tenant, email)).toBe(
+				second.subjectId,
+			);
+
+			await store.deleteSubject(tenant, second.subjectId);
+
+			expect(await store.findSubjectByVerifiedEmail(tenant, email)).toBe(
+				third.subjectId,
+			);
+
+			await store.deleteSubject(tenant, third.subjectId);
+
+			expect(
+				await store.findSubjectByVerifiedEmail(tenant, email),
+			).toBeUndefined();
+		});
+
 		test("a tenant never reaches the subjects, identities or emails of another", async () => {
 			const store = await options.create();
 			const acme = uniqueTenant();

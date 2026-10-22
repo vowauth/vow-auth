@@ -16,6 +16,9 @@ export default defineConfig({
 			"@vow-auth/doctor": fileURLToPath(
 				new URL("./packages/doctor/src/index.ts", import.meta.url),
 			),
+			"@vow-auth/adapter-postgres": fileURLToPath(
+				new URL("./packages/adapter-postgres/src/index.ts", import.meta.url),
+			),
 			"@vow-auth/service": fileURLToPath(
 				new URL("./packages/service/src/index.ts", import.meta.url),
 			),

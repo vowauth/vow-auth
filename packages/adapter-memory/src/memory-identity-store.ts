@@ -1,12 +1,12 @@
-import type {
-	CanonicalEmail,
-	IdentityClaims,
-	IdentityStore,
-} from "@vow-auth/core";
+import type { IdentityClaims, IdentityStore } from "@vow-auth/core";
 
-type StoredSubject = {
+type Row = {
 	readonly tenant: string;
-	readonly identities: Map<string, IdentityClaims>;
+	readonly provider: string;
+	readonly externalId: string;
+	readonly subjectId: string;
+	readonly email: string | undefined;
+	readonly emailVerified: boolean;
 };
 
 const identityKey = (
@@ -15,50 +15,16 @@ const identityKey = (
 	externalId: string,
 ): string => JSON.stringify([tenant, provider, externalId]);
 
-const emailKey = (tenant: string, email: CanonicalEmail): string =>
-	JSON.stringify([tenant, email.address]);
-
-/** In-process identity store for tests and single-instance development. */
+/**
+ * In-process identity store for tests and single-instance development. It
+ * keeps one row per identity, in order of arrival, and a subject is the
+ * `subjectId` of its rows, exactly as the Postgres store does, so the two
+ * answer alike: the owner of a verified email is the oldest identity that
+ * verified it, and deleting that identity hands the email to the next one.
+ * Lookups by email scan the rows, which is fine at the size of a test.
+ */
 export function createMemoryIdentityStore(): IdentityStore {
-	const subjects = new Map<string, StoredSubject>();
-	const subjectsByIdentity = new Map<string, string>();
-	const subjectsByVerifiedEmail = new Map<string, string>();
-	const subjectsByUnverifiedEmail = new Map<string, Set<string>>();
-
-	const forget = (
-		tenant: string,
-		subjectId: string,
-		key: string,
-		identity: IdentityClaims,
-	): void => {
-		subjectsByIdentity.delete(key);
-
-		if (identity.email === undefined) {
-			return;
-		}
-
-		const byEmail = emailKey(tenant, identity.email);
-
-		if (subjectsByVerifiedEmail.get(byEmail) === subjectId) {
-			subjectsByVerifiedEmail.delete(byEmail);
-		}
-
-		subjectsByUnverifiedEmail.get(byEmail)?.delete(subjectId);
-	};
-
-	const removeSubject = (subjectId: string): void => {
-		const subject = subjects.get(subjectId);
-
-		if (subject === undefined) {
-			return;
-		}
-
-		for (const [key, identity] of subject.identities) {
-			forget(subject.tenant, subjectId, key, identity);
-		}
-
-		subjects.delete(subjectId);
-	};
+	const rows = new Map<string, Row>();
 
 	const attach = (
 		tenant: string,
@@ -66,46 +32,45 @@ export function createMemoryIdentityStore(): IdentityStore {
 		identity: IdentityClaims,
 	): string => {
 		const key = identityKey(tenant, identity.provider, identity.externalId);
-		const owner = subjectsByIdentity.get(key);
+		const existing = rows.get(key);
 
-		if (owner !== undefined) {
-			return owner;
+		if (existing !== undefined) {
+			return existing.subjectId;
 		}
 
-		subjectsByIdentity.set(key, subjectId);
-
-		const subject = subjects.get(subjectId) ?? {
+		rows.set(key, {
 			tenant,
-			identities: new Map<string, IdentityClaims>(),
-		};
-
-		subject.identities.set(key, identity);
-		subjects.set(subjectId, subject);
-
-		if (identity.emailVerified) {
-			const verifiedKey = emailKey(tenant, identity.email);
-
-			if (!subjectsByVerifiedEmail.has(verifiedKey)) {
-				subjectsByVerifiedEmail.set(verifiedKey, subjectId);
-			}
-		} else if (identity.email !== undefined) {
-			const unverifiedKey = emailKey(tenant, identity.email);
-			const claimants =
-				subjectsByUnverifiedEmail.get(unverifiedKey) ?? new Set<string>();
-
-			claimants.add(subjectId);
-			subjectsByUnverifiedEmail.set(unverifiedKey, claimants);
-		}
+			provider: identity.provider,
+			externalId: identity.externalId,
+			subjectId,
+			email: identity.email?.address,
+			emailVerified: identity.emailVerified,
+		});
 
 		return subjectId;
 	};
 
+	const withEmail = (
+		tenant: string,
+		address: string,
+		verified: boolean,
+	): Row[] =>
+		Array.from(rows.values()).filter(
+			(row) =>
+				row.tenant === tenant &&
+				row.email === address &&
+				row.emailVerified === verified,
+		);
+
+	const verifiedOwner = (tenant: string, address: string) =>
+		withEmail(tenant, address, true)[0]?.subjectId;
+
 	return {
 		async findSubject(tenant, provider, externalId) {
-			return subjectsByIdentity.get(identityKey(tenant, provider, externalId));
+			return rows.get(identityKey(tenant, provider, externalId))?.subjectId;
 		},
 		async findSubjectByVerifiedEmail(tenant, email) {
-			return subjectsByVerifiedEmail.get(emailKey(tenant, email));
+			return verifiedOwner(tenant, email.address);
 		},
 		async createSubject(tenant, identity) {
 			const subjectId = crypto.randomUUID();
@@ -118,56 +83,34 @@ export function createMemoryIdentityStore(): IdentityStore {
 		},
 		async findSubjectsByUnverifiedEmail(tenant, email) {
 			return Array.from(
-				subjectsByUnverifiedEmail.get(emailKey(tenant, email)) ?? [],
+				new Set(
+					withEmail(tenant, email.address, false).map((row) => row.subjectId),
+				),
 			);
 		},
 		async removeUnverifiedEmailClaims(tenant, email, keepSubjectId) {
-			const byEmail = emailKey(tenant, email);
-			const owner = subjectsByVerifiedEmail.get(byEmail);
-			const touched: string[] = [];
+			const owner = verifiedOwner(tenant, email.address);
+			const claims = withEmail(tenant, email.address, false).filter(
+				(row) => row.subjectId !== keepSubjectId && row.subjectId !== owner,
+			);
 
-			for (const subjectId of Array.from(
-				subjectsByUnverifiedEmail.get(byEmail) ?? [],
-			)) {
-				const subject = subjects.get(subjectId);
-
-				if (
-					subject === undefined ||
-					subjectId === keepSubjectId ||
-					subjectId === owner
-				) {
-					continue;
-				}
-
-				touched.push(subjectId);
-
-				for (const [key, identity] of subject.identities) {
-					if (
-						!identity.emailVerified &&
-						identity.email?.address === email.address
-					) {
-						subject.identities.delete(key);
-						subjectsByIdentity.delete(key);
-					}
-				}
-
-				if (subject.identities.size === 0) {
-					removeSubject(subjectId);
-				}
-
-				subjectsByUnverifiedEmail.get(byEmail)?.delete(subjectId);
+			for (const row of claims) {
+				rows.delete(identityKey(row.tenant, row.provider, row.externalId));
 			}
 
-			return touched;
+			return Array.from(new Set(claims.map((row) => row.subjectId)));
 		},
 		async deleteSubject(tenant, subjectId) {
-			if (subjects.get(subjectId)?.tenant !== tenant) {
-				return false;
+			let deleted = false;
+
+			for (const [key, row] of rows) {
+				if (row.tenant === tenant && row.subjectId === subjectId) {
+					rows.delete(key);
+					deleted = true;
+				}
 			}
 
-			removeSubject(subjectId);
-
-			return true;
+			return deleted;
 		},
 	};
 }
