@@ -52,11 +52,14 @@ const isPositiveInteger = (value: number): boolean => {
 };
 
 /**
- * Creates the meter. The caller owns the numbers: a rule that is not a
- * positive limit over a positive window, or a cost that is not a positive
- * whole number within the limit, is a programming error and throws. A request
- * over the limit is refused with the time the window ends and recorded in the
- * audit; requests within the limit are not recorded, they are the hot path.
+ * Creates the meter. Requests are counted in a sliding window, as in
+ * Cloudflare's rate limiting: the rate is the count of the current interval
+ * plus the count of the previous one, weighted by how much of it still falls
+ * into the last `windowMilliseconds`. The caller owns the numbers: a rule
+ * whose limit or window is not a positive integer, or a cost that is not a
+ * positive whole number within the limit, is a programming error and throws.
+ * A refused request counts nothing; it is refused with the earliest moment it
+ * would pass and recorded in the audit; requests within the limit are not recorded, they are the hot path.
  * If the store fails, so does the call: nothing is let through on a guess.
  */
 export function createMeter(options: MeterOptions): Meter {
@@ -66,11 +69,10 @@ export function createMeter(options: MeterOptions): Meter {
 		async consume(scope, rule, cost = 1) {
 			if (
 				!isPositiveInteger(rule.limit) ||
-				!Number.isFinite(rule.windowMilliseconds) ||
-				rule.windowMilliseconds <= 0
+				!isPositiveInteger(rule.windowMilliseconds)
 			) {
 				throw new RangeError(
-					"limit must be a positive integer and windowMilliseconds a positive finite number",
+					"limit and windowMilliseconds must be positive integers",
 				);
 			}
 

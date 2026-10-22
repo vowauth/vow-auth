@@ -58,6 +58,7 @@ test("A21, A25: the public surface is exactly this, so a new export or a weakeni
 		"createOutboxWorker",
 		"fail",
 		"report",
+		"slidingWindow",
 		"succeed",
 	]);
 

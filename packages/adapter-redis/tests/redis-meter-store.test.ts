@@ -43,7 +43,8 @@ test("a request is one script call with the key, the cost, the limit and a whole
 	expect(runner.calls[0]?.keys).toEqual(["{acme}:meter:email-link:alice"]);
 	expect(runner.calls[0]?.args).toEqual(["2", "5", "1001"]);
 	expect(runner.calls[0]?.script).toContain('redis.call("TIME")');
-	expect(runner.calls[0]?.script).toContain('redis.call("INCRBY"');
+	expect(runner.calls[0]?.script).toContain('redis.call("HMGET"');
+	expect(runner.calls[0]?.script).toContain('redis.call("HSET"');
 	expect(runner.calls[0]?.script).toContain('redis.call("PEXPIRE"');
 });
 

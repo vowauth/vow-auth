@@ -44,6 +44,12 @@ export type {
 	MeterStore,
 	MeterStoreResult,
 } from "./meter/meter-store.js";
+export {
+	type SlidingWindowInput,
+	type SlidingWindowOutcome,
+	type SlidingWindowState,
+	slidingWindow,
+} from "./meter/sliding-window.js";
 export { createEmit, type Emit } from "./outbox/emit.js";
 export type {
 	ClaimInput,

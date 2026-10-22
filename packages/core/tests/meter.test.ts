@@ -28,7 +28,7 @@ const createFixture = (audit?: AuditSink) => {
 	return { meter, records };
 };
 
-test("requests pass up to the limit, then are refused until the window ends", async () => {
+test("requests pass up to the limit, then are refused until the rate has eased", async () => {
 	const { meter } = createFixture();
 	const results = [];
 
@@ -40,16 +40,67 @@ test("requests pass up to the limit, then are refused until the window ends", as
 	expect(results[2]?.ok && results[2].value).toEqual({
 		used: 3,
 		remaining: 0,
-		resetsAtMilliseconds: 2_000,
+		resetsAtMilliseconds: 3_000,
 	});
 	expect(!results[3]?.ok && results[3]?.error).toEqual({
 		code: "rate-limited",
-		resetsAtMilliseconds: 2_000,
+		resetsAtMilliseconds: 2_334,
 	});
+
+	vi.setSystemTime(2_333);
+
+	expect((await meter.consume(SCOPE, RULE)).ok).toBe(false);
+
+	vi.setSystemTime(2_334);
+
+	expect((await meter.consume(SCOPE, RULE)).ok).toBe(true);
+});
+
+test("a refused request counts nothing, however many are refused", async () => {
+	const { meter } = createFixture();
+
+	for (let request = 0; request < 3; request += 1) {
+		await meter.consume(SCOPE, RULE);
+	}
+
+	for (let request = 0; request < 20; request += 1) {
+		expect((await meter.consume(SCOPE, RULE)).ok).toBe(false);
+	}
+
+	vi.setSystemTime(2_334);
+
+	expect((await meter.consume(SCOPE, RULE)).ok).toBe(true);
+});
+
+test("a full limit does not pass twice across the boundary of two intervals", async () => {
+	const { meter } = createFixture();
+
+	vi.setSystemTime(1_999);
+
+	for (let request = 0; request < 3; request += 1) {
+		expect((await meter.consume(SCOPE, RULE)).ok).toBe(true);
+	}
 
 	vi.setSystemTime(2_000);
 
-	expect((await meter.consume(SCOPE, RULE)).ok).toBe(true);
+	expect((await meter.consume(SCOPE, RULE)).ok).toBe(false);
+});
+
+test("the count fades out as the previous interval leaves the window", async () => {
+	const { meter } = createFixture();
+
+	for (let request = 0; request < 3; request += 1) {
+		await meter.consume(SCOPE, RULE);
+	}
+
+	const passes = [];
+
+	for (const time of [2_000, 2_400, 2_700, 3_000, 3_000]) {
+		vi.setSystemTime(time);
+		passes.push((await meter.consume(SCOPE, RULE)).ok);
+	}
+
+	expect(passes).toEqual([false, true, true, true, false]);
 });
 
 test("a cost is counted whole, and a cost that does not fit counts nothing", async () => {
@@ -99,6 +150,7 @@ test("a rule or a cost the types allow but the meter cannot count is a programmi
 	for (const rule of [
 		{ limit: 0, windowMilliseconds: 1_000 },
 		{ limit: 1.5, windowMilliseconds: 1_000 },
+		{ limit: 1, windowMilliseconds: 1.5 },
 		{ limit: Number.NaN, windowMilliseconds: 1_000 },
 		{ limit: 1, windowMilliseconds: 0 },
 		{ limit: 1, windowMilliseconds: Number.POSITIVE_INFINITY },
@@ -171,7 +223,7 @@ test("a store that is full refuses new keys and keeps counting the old ones", as
 	expect((await meter.consume(scopes[0] ?? SCOPE, rule)).ok).toBe(true);
 	expect((await meter.consume(scopes[0] ?? SCOPE, rule)).ok).toBe(false);
 
-	vi.setSystemTime(2_000);
+	vi.setSystemTime(3_000);
 
 	expect((await meter.consume(scopes[2] ?? SCOPE, rule)).ok).toBe(true);
 });

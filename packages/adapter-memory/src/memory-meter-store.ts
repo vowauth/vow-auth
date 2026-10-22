@@ -1,4 +1,8 @@
-import type { MeterStore } from "@vow-auth/core";
+import {
+	type MeterStore,
+	type SlidingWindowState,
+	slidingWindow,
+} from "@vow-auth/core";
 import { estimateBytes } from "./estimate-bytes.js";
 import { createExpiryOrder } from "./expiry-order.js";
 
@@ -16,15 +20,20 @@ export type MemoryMeterStoreOptions = {
 type Entry = {
 	readonly key: string;
 	readonly bytes: number;
-	used: number;
+	state: SlidingWindowState;
 	expiresAtMilliseconds: number;
 	position: number;
 };
 
+const expiryOf = (state: SlidingWindowState): number => {
+	return (state.index + 2) * state.windowMilliseconds;
+};
+
 /**
- * In-process meter store, valid only for one long-lived process. Each counter
- * is a fixed window that starts at its first counted request. Expired counters
- * are dropped in expiry order, each in O(log n).
+ * In-process meter store, valid only for one long-lived process. It decides
+ * with `slidingWindow`, so a key holds two counters and disappears two
+ * intervals after its last counted request. Expired counters are dropped in
+ * expiry order, each in O(log n).
  */
 export function createMemoryMeterStore(
 	options: MemoryMeterStoreOptions,
@@ -62,41 +71,50 @@ export function createMemoryMeterStore(
 			evictExpired(now);
 
 			const existing = entries.get(input.key);
+			const outcome = slidingWindow({
+				state: existing?.state,
+				nowMilliseconds: now,
+				windowMilliseconds: input.windowMilliseconds,
+				limit: input.limit,
+				cost: input.cost,
+			});
+			const report = {
+				used: Math.ceil(outcome.estimate),
+				remaining: Math.max(0, Math.floor(input.limit - outcome.estimate)),
+				resetsAtMilliseconds: outcome.retryAtMilliseconds,
+			};
+
+			if (!outcome.allowed) {
+				return { allowed: false, ...report };
+			}
 
 			if (existing !== undefined) {
-				const fits = existing.used + input.cost <= input.limit;
+				expiryOrder.remove(existing);
+				existing.state = outcome.state;
+				existing.expiresAtMilliseconds = expiryOf(outcome.state);
+				expiryOrder.add(existing);
 
-				if (fits) {
-					existing.used += input.cost;
-				}
-
-				return {
-					allowed: fits,
-					used: existing.used,
-					remaining: Math.max(0, input.limit - existing.used),
-					resetsAtMilliseconds: existing.expiresAtMilliseconds,
-				};
+				return { allowed: true, ...report };
 			}
 
 			const bytes = estimateBytes(input.key.length);
-			const resetsAtMilliseconds = now + input.windowMilliseconds;
 
-			if (usedBytes + bytes > maximumBytes || input.cost > input.limit) {
+			if (usedBytes + bytes > maximumBytes) {
 				return {
 					allowed: false,
 					used: input.limit,
 					remaining: 0,
 					resetsAtMilliseconds:
 						expiryOrder.earliest()?.expiresAtMilliseconds ??
-						resetsAtMilliseconds,
+						outcome.retryAtMilliseconds,
 				};
 			}
 
 			const entry: Entry = {
 				key: input.key,
 				bytes,
-				used: input.cost,
-				expiresAtMilliseconds: resetsAtMilliseconds,
+				state: outcome.state,
+				expiresAtMilliseconds: expiryOf(outcome.state),
 				position: 0,
 			};
 
@@ -104,12 +122,7 @@ export function createMemoryMeterStore(
 			expiryOrder.add(entry);
 			usedBytes += bytes;
 
-			return {
-				allowed: true,
-				used: entry.used,
-				remaining: input.limit - entry.used,
-				resetsAtMilliseconds,
-			};
+			return { allowed: true, ...report };
 		},
 	};
 }
