@@ -83,6 +83,15 @@ export function createMemoryEpochStore(
 			return { now, stamps: keys.map(stampOf) };
 		},
 		async revoke(key, timeToLiveMilliseconds) {
+			if (
+				!Number.isFinite(timeToLiveMilliseconds) ||
+				timeToLiveMilliseconds <= 0
+			) {
+				throw new RangeError(
+					"timeToLiveMilliseconds must be a positive finite number",
+				);
+			}
+
 			const now = Date.now();
 			evictExpired(now);
 

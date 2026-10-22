@@ -10,6 +10,7 @@
 		},
 		"examples/*": {
 			"entry": ["src/server.ts", "tests/**/*.test.ts"]
-		}
+		},
+		"packages/store-contracts": {}
 	}
 }

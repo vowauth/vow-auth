@@ -20,6 +20,7 @@
 		"@vow-auth/core": "workspace:*"
 	},
 	"devDependencies": {
-		"@vow-auth/core": "workspace:*"
+		"@vow-auth/core": "workspace:*",
+		"@vow-auth/store-contracts": "workspace:*"
 	}
 }

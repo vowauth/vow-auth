@@ -1,0 +1,27 @@
+{
+	"name": "@vow-auth/store-contracts",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"license": "MIT",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"build": "tsc -p tsconfig.json"
+	},
+	"peerDependencies": {
+		"@vow-auth/core": "workspace:*",
+		"vitest": "*"
+	},
+	"devDependencies": {
+		"@vow-auth/core": "workspace:*",
+		"vitest": "^5.0.3"
+	}
+}
