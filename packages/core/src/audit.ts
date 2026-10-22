@@ -1,3 +1,5 @@
+import type { ValueOf } from "./shared/value-of.js";
+
 /** Names of the events the core reports. Applications may report their own events through the same sink. */
 export const AUDIT_EVENTS = {
 	authorizeCheck: "authorize.check",
@@ -20,7 +22,7 @@ export const AUDIT_OUTCOMES = {
 	success: "success",
 } as const;
 
-export type AuditOutcome = (typeof AUDIT_OUTCOMES)[keyof typeof AUDIT_OUTCOMES];
+export type AuditOutcome = ValueOf<typeof AUDIT_OUTCOMES>;
 
 /**
  * Why an operation refused. Callers of the core only ever see one generic

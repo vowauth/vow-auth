@@ -297,3 +297,25 @@ test("the worker refuses unusable options", () => {
 		);
 	}
 });
+
+test("a payload key such as __proto__ stays an ordinary key and never reaches a prototype", async () => {
+	const received: OutboxRecord[] = [];
+	const { emit, worker } = createFixture({
+		"email.send": async (event) => {
+			received.push(event);
+		},
+	});
+
+	await emit({
+		type: "email.send",
+		payload: JSON.parse('{"__proto__":"x","to":"a@example.com"}'),
+	});
+	await worker.runOnce();
+
+	const payload = received[0]?.payload;
+
+	expect(payload && Object.hasOwn(payload, "__proto__")).toBe(true);
+	expect(payload && Object.getPrototypeOf(payload)).toBe(Object.prototype);
+	expect(payload?.to).toBe("a@example.com");
+	expect(Reflect.get({}, "to")).toBeUndefined();
+});

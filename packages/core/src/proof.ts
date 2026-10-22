@@ -11,7 +11,8 @@ import {
 	canonicalizeEmail,
 } from "./identity/canonical-email.js";
 import { fail, type Result, succeed } from "./result.js";
-import { isRow } from "./shared/is-row.js";
+import { isNonEmptyString } from "./shared/is-non-empty-string.js";
+import { isPlainObject } from "./shared/is-plain-object.js";
 import { createMintRegistry } from "./shared/mint-registry.js";
 import { own } from "./shared/own.js";
 
@@ -71,12 +72,8 @@ const CLAIM_KEYS: readonly string[] = [
 
 const mintedProofs = createMintRegistry<Proof>();
 
-const isNonEmptyString = (value: unknown): value is string => {
-	return typeof value === "string" && value.length > 0;
-};
-
 const parseClaims = (raw: unknown): Result<IdentityClaims, string> => {
-	if (!isRow(raw)) {
+	if (!isPlainObject(raw)) {
 		return fail(AUDIT_REASONS.invalidClaims);
 	}
 
@@ -127,8 +124,10 @@ const parseClaims = (raw: unknown): Result<IdentityClaims, string> => {
 
 /**
  * Runs a factor and mints a proof from what it established. The claims are
- * validated against the closed claim shape and copied from own properties
- * only. Every refusal, whether the factor rejected the response, threw, or
+ * validated against the closed claim shape, so a claim the core does not
+ * understand is refused instead of ignored, and copied from own properties
+ * only; the copy is frozen, because a proof must not change after it was
+ * minted. Every refusal, whether the factor rejected the response, threw, or
  * returned malformed claims, reports the same `invalid-proof` error; the
  * audit tells them apart. A verified proof is recorded before it is minted:
  * if the sink throws, there is no proof.
@@ -139,6 +138,7 @@ export async function verifyProof(
 	options: VerifyProofOptions = {},
 ): Promise<Result<Proof>> {
 	const audit = own(options, "audit");
+
 	const refuse = async (reason: string): Promise<Result<Proof>> => {
 		await report(audit, {
 			event: AUDIT_EVENTS.proofVerify,
@@ -151,6 +151,7 @@ export async function verifyProof(
 
 		return fail(ERROR_CODES.invalidProof);
 	};
+
 	let outcome: Result<unknown>;
 
 	try {
@@ -185,14 +186,12 @@ export async function verifyProof(
 	});
 
 	return succeed(
-		mintedProofs.mint(
-			Object.freeze({
-				factor: factor.id,
-				strength: factor.strength,
-				verifiedAtMilliseconds: (own(options, "now") ?? Date.now)(),
-				claims,
-			}),
-		),
+		mintedProofs.mint({
+			factor: factor.id,
+			strength: factor.strength,
+			verifiedAtMilliseconds: (own(options, "now") ?? Date.now)(),
+			claims,
+		}),
 	);
 }
 

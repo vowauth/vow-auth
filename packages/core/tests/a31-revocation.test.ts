@@ -229,10 +229,10 @@ test("a sealed session of an unknown chain shape is rejected", async () => {
 		secrets: [{ version: 1, value: "session-secret-0123456789abcdefghijk" }],
 	});
 	const known = [
-		["tenant", "acme", 0],
-		["user", "alice", 0],
-		["device", "laptop", 0],
-		["session", "s-1", 0],
+		{ scope: "tenant", id: "acme", stamp: 0 },
+		{ scope: "user", id: "alice", stamp: 0 },
+		{ scope: "device", id: "laptop", stamp: 0 },
+		{ scope: "session", id: "s-1", stamp: 0 },
 	];
 
 	const sealChain = (chain: readonly unknown[]) => {
@@ -249,11 +249,13 @@ test("a sealed session of an unknown chain shape is rejected", async () => {
 	expect((await sessionTokens.verify(await sealChain(known))).ok).toBe(true);
 
 	for (const chain of [
-		[...known, ["agent", "a-5", 0]],
+		[...known, { scope: "agent", id: "a-5", stamp: 0 }],
 		known.slice(0, 3),
 		[known[1], known[0], known[2], known[3]],
-		known.map(([scope, id]) => [scope, id, "0"]),
-		known.map(([scope, , stamp]) => [scope, 7, stamp]),
+		known.map((link) => ({ ...link, stamp: "0" })),
+		known.map((link) => ({ ...link, id: 7 })),
+		known.map(({ scope, id }) => [scope, id, 0]),
+		known.map(({ scope, id }) => ({ scope, id })),
 	]) {
 		expect((await sessionTokens.verify(await sealChain(chain))).ok).toBe(false);
 	}

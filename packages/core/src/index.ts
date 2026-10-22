@@ -21,10 +21,11 @@ export {
 	canonicalizeEmail,
 } from "./identity/canonical-email.js";
 export type { IdentityStore } from "./identity/identity-store.js";
-export type {
-	IdentityChange,
-	MutateIdentity,
-	MutationOutcome,
+export {
+	IDENTITY_CHANGE_TYPES,
+	type IdentityChange,
+	type MutateIdentity,
+	type MutationOutcome,
 } from "./identity/mutate-identity.js";
 export {
 	RESOLUTION_OUTCOMES,

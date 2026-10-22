@@ -46,6 +46,7 @@ export type Tokens = {
  */
 export function createTokens(options: TokensOptions): Tokens {
 	const audit = own(options, "audit");
+
 	const record = (
 		event: string,
 		outcome: AuditOutcome,
@@ -61,6 +62,7 @@ export function createTokens(options: TokensOptions): Tokens {
 			detail: { purpose },
 		});
 	};
+
 	const refuse = async (reason: string, purpose: string) => {
 		await record(
 			AUDIT_EVENTS.tokenConsume,

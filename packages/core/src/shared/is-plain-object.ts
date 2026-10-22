@@ -1,8 +1,8 @@
 import { owns } from "./owns.js";
 
-export type Row = Record<string, unknown>;
+export type PlainObject = Record<string, unknown>;
 
-export const isRow = (value: unknown): value is Row => {
+export const isPlainObject = (value: unknown): value is PlainObject => {
 	if (typeof value !== "object" || value === null) {
 		return false;
 	}

@@ -9,7 +9,10 @@ import { ERROR_CODES } from "../errors.js";
 import { fail, type Result, succeed } from "../result.js";
 import type { Sealer } from "../sealer.js";
 import { isBornSession, type Session } from "../session.js";
+import { isPlainObject } from "../shared/is-plain-object.js";
 import { own } from "../shared/own.js";
+import { safeParseJson } from "../shared/safe-parse-json.js";
+import type { ValueOf } from "../shared/value-of.js";
 import type { EpochReading, EpochStore } from "./epoch-store.js";
 
 /** Options for creating session tokens. */
@@ -66,15 +69,19 @@ export type SessionTokens = {
 	revoke(level: RevocationLevel): Promise<void>;
 };
 
-const REVOCATION_SCOPES = {
+export const REVOCATION_SCOPES = {
 	tenant: "tenant",
 	user: "user",
 	device: "device",
 	session: "session",
 } as const;
 
-type Scope = (typeof REVOCATION_SCOPES)[keyof typeof REVOCATION_SCOPES];
-type Link = readonly [scope: Scope, id: string, stamp: number];
+type Scope = ValueOf<typeof REVOCATION_SCOPES>;
+type ChainLink = {
+	readonly scope: Scope;
+	readonly id: string;
+	readonly stamp: number;
+};
 
 const SESSION_PURPOSE = "session";
 const CHAIN_SCOPES: readonly Scope[] = [
@@ -107,39 +114,31 @@ const readEpochs = async (
 	return reading;
 };
 
-const isLink = (value: unknown, scope: Scope | undefined): value is Link => {
+const isLink = (
+	value: unknown,
+	scope: Scope | undefined,
+): value is ChainLink => {
 	return (
-		Array.isArray(value) &&
-		value.length === 3 &&
-		value[0] === scope &&
-		typeof value[1] === "string" &&
-		Number.isFinite(value[2])
+		isPlainObject(value) &&
+		own(value, "scope") === scope &&
+		typeof own(value, "id") === "string" &&
+		Number.isFinite(own(value, "stamp"))
 	);
 };
 
 const parseChain = (
 	serialized: string | undefined,
-): readonly Link[] | undefined => {
+): readonly ChainLink[] | undefined => {
 	if (serialized === undefined) {
 		return undefined;
 	}
 
-	try {
-		const chain: unknown = JSON.parse(serialized);
+	const chain = safeParseJson(serialized);
 
-		return Array.isArray(chain) &&
-			chain.every((link, index) => isLink(link, CHAIN_SCOPES[index]))
-			? chain
-			: undefined;
-	} catch {
-		return undefined;
-	}
-};
-
-const tenantOf = (chain: readonly Link[]): string => {
-	const [tenantLink] = chain;
-
-	return tenantLink === undefined ? "" : tenantLink[1];
+	return Array.isArray(chain) &&
+		chain.every((link, index) => isLink(link, CHAIN_SCOPES[index]))
+		? chain
+		: undefined;
 };
 
 /**
@@ -196,22 +195,25 @@ export function createSessionTokens(
 				detail: { device: input.device, session: session.id },
 			});
 
-			const levels: readonly (readonly [Scope, string])[] = [
-				[REVOCATION_SCOPES.tenant, input.tenant],
-				[REVOCATION_SCOPES.user, session.subject],
-				[REVOCATION_SCOPES.device, input.device],
-				[REVOCATION_SCOPES.session, session.id],
-			];
+			const levels: readonly { readonly scope: Scope; readonly id: string }[] =
+				[
+					{ scope: REVOCATION_SCOPES.tenant, id: input.tenant },
+					{ scope: REVOCATION_SCOPES.user, id: session.subject },
+					{ scope: REVOCATION_SCOPES.device, id: input.device },
+					{ scope: REVOCATION_SCOPES.session, id: session.id },
+				];
+
 			const reading = await readEpochs(
 				epochs,
-				levels.map(([scope, id]) => keyOf(input.tenant, scope, id)),
+				levels.map(({ scope, id }) => keyOf(input.tenant, scope, id)),
 			);
+
 			const chain = levels.map(
-				([scope, id], index): Link => [
+				({ scope, id }, index): ChainLink => ({
 					scope,
 					id,
-					reading.stamps[index] ?? Number.NaN,
-				],
+					stamp: reading.stamps[index] ?? Number.NaN,
+				}),
 			);
 
 			return succeed(
@@ -245,6 +247,7 @@ export function createSessionTokens(
 
 				return fail(ERROR_CODES.invalidSession);
 			};
+
 			const unsealed = await sealer.unseal(token, SESSION_PURPOSE);
 
 			if (!unsealed.ok) {
@@ -252,10 +255,11 @@ export function createSessionTokens(
 			}
 
 			const chain = parseChain(own(unsealed.value, "chain"));
-			const [, user, device, session] = chain ?? [];
+			const [tenantLink, user, device, session] = chain ?? [];
 
 			if (
 				chain === undefined ||
+				tenantLink === undefined ||
 				user === undefined ||
 				device === undefined ||
 				session === undefined
@@ -263,38 +267,39 @@ export function createSessionTokens(
 				return refuse(AUDIT_REASONS.malformedChain, "", "", {});
 			}
 
-			const tenant = tenantOf(chain);
+			const tenant = tenantLink.id;
+
 			const reading = await readEpochs(
 				epochs,
-				chain.map(([scope, id]) => keyOf(tenant, scope, id)),
+				chain.map(({ scope, id }) => keyOf(tenant, scope, id)),
 			);
+
 			const expiresAtMilliseconds = Number(
 				own(unsealed.value, "expiresAtMilliseconds"),
 			);
 
 			if (!(reading.now < expiresAtMilliseconds)) {
-				return refuse(AUDIT_REASONS.expired, tenant, user[1], {
-					device: device[1],
+				return refuse(AUDIT_REASONS.expired, tenant, user.id, {
+					device: device.id,
 				});
 			}
 
 			const revokedIndex = chain.findIndex(
-				([, , stamp], index) =>
-					!(stamp >= (reading.stamps[index] ?? Number.NaN)),
+				(link, index) => !(link.stamp >= (reading.stamps[index] ?? Number.NaN)),
 			);
 
 			if (revokedIndex !== -1) {
-				return refuse(AUDIT_REASONS.revoked, tenant, user[1], {
-					device: device[1],
-					scope: chain[revokedIndex]?.[0] ?? "",
+				return refuse(AUDIT_REASONS.revoked, tenant, user.id, {
+					device: device.id,
+					scope: chain[revokedIndex]?.scope ?? "",
 				});
 			}
 
 			return succeed({
 				tenant,
-				subject: user[1],
-				device: device[1],
-				session: session[1],
+				subject: user.id,
+				device: device.id,
+				session: session.id,
 			});
 		},
 		async revoke(level) {
@@ -305,6 +310,7 @@ export function createSessionTokens(
 				keyOf(level.tenant, level.scope, id),
 				maximumLifeTimeMilliseconds,
 			);
+
 			await report(audit, {
 				event: AUDIT_EVENTS.sessionRevoke,
 				outcome: AUDIT_OUTCOMES.success,

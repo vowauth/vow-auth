@@ -6,6 +6,7 @@ import {
 } from "./audit.js";
 import { createMintRegistry } from "./shared/mint-registry.js";
 import { own } from "./shared/own.js";
+import type { ValueOf } from "./shared/value-of.js";
 
 /** The two kinds of decision. */
 export const DECISION_KINDS = { allow: "allow", deny: "deny" } as const;
@@ -16,7 +17,7 @@ export const DENY_REASONS = {
 	policyError: "policy-error",
 } as const;
 
-export type DenyReason = (typeof DENY_REASONS)[keyof typeof DENY_REASONS];
+export type DenyReason = ValueOf<typeof DENY_REASONS>;
 
 /** Verdict of a policy evaluation. Only `allow` can be turned into a session. */
 export type Decision =
@@ -87,9 +88,7 @@ export async function evaluatePolicy(
 		return { kind: DECISION_KINDS.deny, reason: denyReason };
 	}
 
-	return mintedAllowDecisions.mint(
-		Object.freeze({ kind: DECISION_KINDS.allow, subject }),
-	);
+	return mintedAllowDecisions.mint({ kind: DECISION_KINDS.allow, subject });
 }
 
 export const isMintedAllow = mintedAllowDecisions.has;

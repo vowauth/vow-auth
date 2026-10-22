@@ -1,4 +1,5 @@
 import { own } from "../shared/own.js";
+import type { ValueOf } from "../shared/value-of.js";
 import type { OutboxRecord, OutboxStore } from "./outbox-store.js";
 
 /** Handles one event. It may throw; a throw means try again later. */
@@ -28,8 +29,22 @@ export type OutboxWorker = {
 	runOnce(): Promise<OutboxRunSummary>;
 };
 
-const isPositiveInteger = (value: number): boolean => {
-	return Number.isInteger(value) && value > 0;
+const RUN_OUTCOMES = {
+	buried: "buried",
+	completed: "completed",
+	retried: "retried",
+} as const;
+
+const requirePositiveInteger = (name: string, value: number): void => {
+	if (!Number.isInteger(value) || value <= 0) {
+		throw new RangeError(`${name} must be a positive integer`);
+	}
+};
+
+const requirePositiveNumber = (name: string, value: number): void => {
+	if (!Number.isFinite(value) || value <= 0) {
+		throw new RangeError(`${name} must be a positive finite number`);
+	}
 };
 
 /**
@@ -47,23 +62,10 @@ export function createOutboxWorker(options: OutboxWorkerOptions): OutboxWorker {
 		maximumAttempts,
 	} = options;
 
-	for (const [name, value] of [
-		["batchSize", batchSize],
-		["maximumAttempts", maximumAttempts],
-	] as const) {
-		if (!isPositiveInteger(value)) {
-			throw new RangeError(`${name} must be a positive integer`);
-		}
-	}
-
-	for (const [name, value] of [
-		["leaseMilliseconds", leaseMilliseconds],
-		["retryDelayMilliseconds", retryDelayMilliseconds],
-	] as const) {
-		if (!Number.isFinite(value) || value <= 0) {
-			throw new RangeError(`${name} must be a positive finite number`);
-		}
-	}
+	requirePositiveInteger("batchSize", batchSize);
+	requirePositiveInteger("maximumAttempts", maximumAttempts);
+	requirePositiveNumber("leaseMilliseconds", leaseMilliseconds);
+	requirePositiveNumber("retryDelayMilliseconds", retryDelayMilliseconds);
 
 	return {
 		async runOnce() {
@@ -71,6 +73,7 @@ export function createOutboxWorker(options: OutboxWorkerOptions): OutboxWorker {
 				limit: batchSize,
 				leaseMilliseconds,
 			});
+
 			const outcomes = await Promise.all(
 				claimed.map(async (record) => {
 					const handler = own(handlers, record.type);
@@ -78,7 +81,7 @@ export function createOutboxWorker(options: OutboxWorkerOptions): OutboxWorker {
 					if (handler === undefined) {
 						await store.bury(record);
 
-						return "buried";
+						return RUN_OUTCOMES.buried;
 					}
 
 					try {
@@ -87,24 +90,28 @@ export function createOutboxWorker(options: OutboxWorkerOptions): OutboxWorker {
 						if (record.attempts >= maximumAttempts) {
 							await store.bury(record);
 
-							return "buried";
+							return RUN_OUTCOMES.buried;
 						}
 
 						await store.release(record, retryDelayMilliseconds);
 
-						return "retried";
+						return RUN_OUTCOMES.retried;
 					}
 
 					await store.complete(record);
 
-					return "completed";
+					return RUN_OUTCOMES.completed;
 				}),
 			);
 
+			const countOf = (outcome: ValueOf<typeof RUN_OUTCOMES>): number => {
+				return outcomes.filter((candidate) => candidate === outcome).length;
+			};
+
 			return {
-				completed: outcomes.filter((outcome) => outcome === "completed").length,
-				retried: outcomes.filter((outcome) => outcome === "retried").length,
-				buried: outcomes.filter((outcome) => outcome === "buried").length,
+				completed: countOf(RUN_OUTCOMES.completed),
+				retried: countOf(RUN_OUTCOMES.retried),
+				buried: countOf(RUN_OUTCOMES.buried),
 			};
 		},
 	};

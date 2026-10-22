@@ -5,18 +5,18 @@ import type {
 } from "@vow-auth/core";
 
 type StoredSubject = {
-	readonly tenantId: string;
+	readonly tenant: string;
 	readonly identities: Map<string, IdentityClaims>;
 };
 
 const identityKey = (
-	tenantId: string,
+	tenant: string,
 	provider: string,
 	externalId: string,
-): string => JSON.stringify([tenantId, provider, externalId]);
+): string => JSON.stringify([tenant, provider, externalId]);
 
-const emailKey = (tenantId: string, email: CanonicalEmail): string =>
-	JSON.stringify([tenantId, email.address]);
+const emailKey = (tenant: string, email: CanonicalEmail): string =>
+	JSON.stringify([tenant, email.address]);
 
 /** In-process identity store for tests and single-instance development. */
 export function createMemoryIdentityStore(): IdentityStore {
@@ -26,7 +26,7 @@ export function createMemoryIdentityStore(): IdentityStore {
 	const subjectsByUnverifiedEmail = new Map<string, Set<string>>();
 
 	const forget = (
-		tenantId: string,
+		tenant: string,
 		subjectId: string,
 		key: string,
 		identity: IdentityClaims,
@@ -37,7 +37,7 @@ export function createMemoryIdentityStore(): IdentityStore {
 			return;
 		}
 
-		const byEmail = emailKey(tenantId, identity.email);
+		const byEmail = emailKey(tenant, identity.email);
 
 		if (subjectsByVerifiedEmail.get(byEmail) === subjectId) {
 			subjectsByVerifiedEmail.delete(byEmail);
@@ -54,18 +54,18 @@ export function createMemoryIdentityStore(): IdentityStore {
 		}
 
 		for (const [key, identity] of subject.identities) {
-			forget(subject.tenantId, subjectId, key, identity);
+			forget(subject.tenant, subjectId, key, identity);
 		}
 
 		subjects.delete(subjectId);
 	};
 
 	const attach = (
-		tenantId: string,
+		tenant: string,
 		subjectId: string,
 		identity: IdentityClaims,
 	): string => {
-		const key = identityKey(tenantId, identity.provider, identity.externalId);
+		const key = identityKey(tenant, identity.provider, identity.externalId);
 		const owner = subjectsByIdentity.get(key);
 
 		if (owner !== undefined) {
@@ -75,7 +75,7 @@ export function createMemoryIdentityStore(): IdentityStore {
 		subjectsByIdentity.set(key, subjectId);
 
 		const subject = subjects.get(subjectId) ?? {
-			tenantId,
+			tenant,
 			identities: new Map<string, IdentityClaims>(),
 		};
 
@@ -83,13 +83,13 @@ export function createMemoryIdentityStore(): IdentityStore {
 		subjects.set(subjectId, subject);
 
 		if (identity.emailVerified) {
-			const verifiedKey = emailKey(tenantId, identity.email);
+			const verifiedKey = emailKey(tenant, identity.email);
 
 			if (!subjectsByVerifiedEmail.has(verifiedKey)) {
 				subjectsByVerifiedEmail.set(verifiedKey, subjectId);
 			}
 		} else if (identity.email !== undefined) {
-			const unverifiedKey = emailKey(tenantId, identity.email);
+			const unverifiedKey = emailKey(tenant, identity.email);
 			const claimants =
 				subjectsByUnverifiedEmail.get(unverifiedKey) ?? new Set<string>();
 
@@ -101,30 +101,28 @@ export function createMemoryIdentityStore(): IdentityStore {
 	};
 
 	return {
-		async findSubject(tenantId, provider, externalId) {
-			return subjectsByIdentity.get(
-				identityKey(tenantId, provider, externalId),
-			);
+		async findSubject(tenant, provider, externalId) {
+			return subjectsByIdentity.get(identityKey(tenant, provider, externalId));
 		},
-		async findSubjectByVerifiedEmail(tenantId, email) {
-			return subjectsByVerifiedEmail.get(emailKey(tenantId, email));
+		async findSubjectByVerifiedEmail(tenant, email) {
+			return subjectsByVerifiedEmail.get(emailKey(tenant, email));
 		},
-		async createSubject(tenantId, identity) {
+		async createSubject(tenant, identity) {
 			const subjectId = crypto.randomUUID();
-			const owner = attach(tenantId, subjectId, identity);
+			const owner = attach(tenant, subjectId, identity);
 
-			return { subjectId: owner, created: owner === subjectId };
+			return { subjectId: owner, isNew: owner === subjectId };
 		},
-		async linkIdentity(tenantId, subjectId, identity) {
-			return attach(tenantId, subjectId, identity);
+		async linkIdentity(tenant, subjectId, identity) {
+			return attach(tenant, subjectId, identity);
 		},
-		async findSubjectsByUnverifiedEmail(tenantId, email) {
+		async findSubjectsByUnverifiedEmail(tenant, email) {
 			return Array.from(
-				subjectsByUnverifiedEmail.get(emailKey(tenantId, email)) ?? [],
+				subjectsByUnverifiedEmail.get(emailKey(tenant, email)) ?? [],
 			);
 		},
-		async removeUnverifiedEmailClaims(tenantId, email, keepSubjectId) {
-			const byEmail = emailKey(tenantId, email);
+		async removeUnverifiedEmailClaims(tenant, email, keepSubjectId) {
+			const byEmail = emailKey(tenant, email);
 			const owner = subjectsByVerifiedEmail.get(byEmail);
 			const touched: string[] = [];
 
@@ -162,8 +160,8 @@ export function createMemoryIdentityStore(): IdentityStore {
 
 			return touched;
 		},
-		async deleteSubject(tenantId, subjectId) {
-			if (subjects.get(subjectId)?.tenantId !== tenantId) {
+		async deleteSubject(tenant, subjectId) {
+			if (subjects.get(subjectId)?.tenant !== tenant) {
 				return false;
 			}
 

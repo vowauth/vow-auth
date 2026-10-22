@@ -2,6 +2,7 @@ import {
 	AUDIT_EVENTS,
 	AUDIT_OUTCOMES,
 	AUDIT_REASONS,
+	type AuditOutcome,
 	type AuditSink,
 	report,
 } from "../audit.js";
@@ -9,6 +10,7 @@ import { ERROR_CODES } from "../errors.js";
 import { isMintedProof } from "../proof.js";
 import { fail, type Result, succeed } from "../result.js";
 import { own } from "../shared/own.js";
+import type { ValueOf } from "../shared/value-of.js";
 import type { IdentityStore } from "./identity-store.js";
 
 /** How an identity resolved. */
@@ -18,8 +20,7 @@ export const RESOLUTION_OUTCOMES = {
 	linked: "linked",
 } as const;
 
-export type ResolutionOutcome =
-	(typeof RESOLUTION_OUTCOMES)[keyof typeof RESOLUTION_OUTCOMES];
+export type ResolutionOutcome = ValueOf<typeof RESOLUTION_OUTCOMES>;
 
 /** The subject an identity resolved to, and how. */
 export type Resolution = {
@@ -44,13 +45,14 @@ export type ResolveIdentityOptions = {
  */
 export async function resolveIdentity(
 	store: IdentityStore,
-	tenantId: string,
+	tenant: string,
 	proof: unknown,
 	options: ResolveIdentityOptions = {},
 ): Promise<Result<Resolution>> {
 	const audit = own(options, "audit");
+
 	const record = (
-		outcome: typeof AUDIT_OUTCOMES.success | typeof AUDIT_OUTCOMES.refusal,
+		outcome: AuditOutcome,
 		reason: string,
 		subject: string,
 		provider: string,
@@ -59,7 +61,7 @@ export async function resolveIdentity(
 			event: AUDIT_EVENTS.identityResolve,
 			outcome,
 			reason,
-			tenant: tenantId,
+			tenant,
 			subject,
 			detail: { provider },
 		});
@@ -73,7 +75,7 @@ export async function resolveIdentity(
 
 	const identity = proof.claims;
 	const existing = await store.findSubject(
-		tenantId,
+		tenant,
 		identity.provider,
 		identity.externalId,
 	);
@@ -94,7 +96,7 @@ export async function resolveIdentity(
 
 	if (identity.emailVerified) {
 		const owner = await store.findSubjectByVerifiedEmail(
-			tenantId,
+			tenant,
 			identity.email,
 		);
 
@@ -105,14 +107,15 @@ export async function resolveIdentity(
 				owner,
 				identity.provider,
 			);
-			const subjectId = await store.linkIdentity(tenantId, owner, identity);
+
+			const subjectId = await store.linkIdentity(tenant, owner, identity);
 
 			return succeed({ subjectId, outcome: RESOLUTION_OUTCOMES.linked });
 		}
 	}
 
-	const created = await store.createSubject(tenantId, identity);
-	const outcome = created.created
+	const created = await store.createSubject(tenant, identity);
+	const outcome = created.isNew
 		? RESOLUTION_OUTCOMES.created
 		: RESOLUTION_OUTCOMES.existing;
 

@@ -325,3 +325,32 @@ test("A4: the store takes only a canonical address, which the compiler enforces"
 		canonical && (await store.findSubjectByVerifiedEmail("t1", canonical)),
 	).toBeUndefined();
 });
+
+test("A4: length limits and the domain case mapping follow the standards", async () => {
+	const accepted = (email: string) => canonicalizeEmail(email)?.address;
+
+	expect(accepted(`${"a".repeat(64)}@example.com`)).toBe(
+		`${"a".repeat(64)}@example.com`,
+	);
+	expect(accepted(`${"a".repeat(65)}@example.com`)).toBeUndefined();
+	expect(accepted(`a@${"b".repeat(63)}.com`)).toBe(`a@${"b".repeat(63)}.com`);
+	expect(accepted(`a@${"b".repeat(64)}.com`)).toBeUndefined();
+	expect(
+		accepted(
+			`a@${["c".repeat(60), "c".repeat(60), "c".repeat(60), "c".repeat(60), "c".repeat(60), "com"].join(".")}`,
+		),
+	).toBeUndefined();
+	expect(
+		accepted(
+			`${"a".repeat(64)}@${["d".repeat(60), "d".repeat(60), "d".repeat(60), "d".repeat(60), "com"].join(".")}`,
+		),
+	).toBeUndefined();
+	expect(accepted(`a@${"e".repeat(2_000)}.com`)).toBeUndefined();
+	expect(accepted("a@example.com.")).toBeUndefined();
+	expect(accepted("a@example..com")).toBeUndefined();
+	expect(accepted('"a b"@example.com')).toBeUndefined();
+	expect(accepted("a(comment)@example.com")).toBeUndefined();
+	expect(accepted("a@x.ΟΔΟΣ")).toBe(accepted("a@x.οδοσ"));
+	expect(accepted("a@x.ΟΔΟΣ")).toBeDefined();
+	expect(accepted("a@BÜCHER.example")).toBe(accepted("a@bücher.example"));
+});

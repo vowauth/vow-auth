@@ -74,17 +74,20 @@ export function createAuth(options: AuthOptions): Auth {
 	const sealer = createSealer({ secrets: options.secrets, audit });
 	const tokens = createTokens({ store: options.tokenStore, audit });
 	const meter = createMeter({ store: options.meterStore, audit });
+
 	const sessionTokens = createSessionTokens({
 		sealer,
 		epochs: options.epochs,
 		maximumLifeTimeMilliseconds: options.maximumLifeTimeMilliseconds,
 		audit,
 	});
+
 	const mutateIdentity = createMutateIdentity({
 		store: options.identities,
 		sessionTokens,
 		audit,
 	});
+
 	const signIn = createSignIn({
 		identities: options.identities,
 		sessionTokens,

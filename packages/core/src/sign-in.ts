@@ -11,6 +11,7 @@ import { type Factor, type Proof, verifyProof } from "./proof.js";
 import { fail, type Result, succeed } from "./result.js";
 import { issueSession } from "./session.js";
 import type { SessionTokens } from "./session-tokens/session-tokens.js";
+import { isNonEmptyString } from "./shared/is-non-empty-string.js";
 
 /** What the sign-in policy is asked about: who, where, and how they proved it. */
 export type SignInPolicyInput = {
@@ -52,8 +53,6 @@ export type SignedIn = {
 
 /** Signs a person in with any factor. */
 export type SignIn = (request: SignInRequest) => Promise<Result<SignedIn>>;
-
-const isNonEmptyString = (value: string): boolean => value.length > 0;
 
 /**
  * Creates the sign-in flow, the only road to a session: prove with a factor,
@@ -98,6 +97,7 @@ export function createSignIn(options: SignInOptions): SignIn {
 		}
 
 		const { subjectId, outcome } = resolution.value;
+
 		let evicted: readonly string[] = [];
 
 		if (proof.value.claims.emailVerified) {
@@ -118,6 +118,7 @@ export function createSignIn(options: SignInOptions): SignIn {
 			(subject) => policy({ subject, tenant, proof: proof.value }),
 			{ audit, tenant },
 		);
+
 		const session = issueSession(decision);
 
 		if (!session.ok) {

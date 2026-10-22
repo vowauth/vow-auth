@@ -7,7 +7,9 @@ import {
 } from "./audit.js";
 import { ERROR_CODES } from "./errors.js";
 import { fail, type Result, succeed } from "./result.js";
+import { isPlainObject } from "./shared/is-plain-object.js";
 import { own } from "./shared/own.js";
+import { safeParseJson } from "./shared/safe-parse-json.js";
 
 /** One version of the server secret. */
 export type SecretVersion = {
@@ -52,15 +54,50 @@ type SealedContents = {
 	readonly expiresAtMilliseconds: number;
 };
 
+type OpenResult =
+	| { readonly payload: Readonly<Record<string, string>> }
+	| { readonly reason: string };
+
+const parseContents = (raw: unknown): SealedContents | undefined => {
+	if (!isPlainObject(raw)) {
+		return undefined;
+	}
+
+	const payload = own(raw, "payload");
+	const expiresAtMilliseconds = own(raw, "expiresAtMilliseconds");
+
+	if (
+		!isPlainObject(payload) ||
+		typeof expiresAtMilliseconds !== "number" ||
+		!Number.isFinite(expiresAtMilliseconds)
+	) {
+		return undefined;
+	}
+
+	const entries: [string, string][] = [];
+
+	for (const [key, value] of Object.entries(payload)) {
+		if (typeof value !== "string") {
+			return undefined;
+		}
+
+		entries.push([key, value]);
+	}
+
+	return { payload: Object.fromEntries(entries), expiresAtMilliseconds };
+};
+
 const MINIMUM_SECRET_LENGTH = 32;
 const SALT_BYTES = 16;
 const INITIALIZATION_VECTOR_BYTES = 12;
+const MAXIMUM_VERSION_DIGITS = 9;
+
 const KEY_DERIVATION_LABEL = "vow-auth/seal/v1/";
+
 const DIGITS = new Set("0123456789");
 const BASE64_URL_CHARACTERS = new Set(
 	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
 );
-const MAXIMUM_VERSION_DIGITS = 9;
 
 const consistsOf = (text: string, alphabet: Set<string>): boolean => {
 	return (
@@ -177,20 +214,17 @@ const requireValidSecrets = (
  */
 export function createSealer(options: SealerOptions): Sealer {
 	const { secrets } = options;
+
 	const audit = own(options, "audit");
+
 	const currentSecret = requireValidSecrets(secrets);
 	const currentKey = importSecret(currentSecret.value);
+
 	const secretKeys = new Map(
 		secrets.map((secret) => [secret.version, importSecret(secret.value)]),
 	);
 
-	const open = async (
-		sealed: string,
-		purpose: string,
-	): Promise<
-		| { readonly payload: Readonly<Record<string, string>> }
-		| { readonly reason: string }
-	> => {
+	const open = async (sealed: string, purpose: string): Promise<OpenResult> => {
 		const parsed = parseSealed(sealed);
 
 		if (parsed === undefined) {
@@ -205,6 +239,7 @@ export function createSealer(options: SealerOptions): Sealer {
 
 		try {
 			const bytes = fromBase64Url(parsed.body);
+
 			const plaintext = await crypto.subtle.decrypt(
 				{
 					name: "AES-GCM",
@@ -217,7 +252,12 @@ export function createSealer(options: SealerOptions): Sealer {
 				),
 				bytes.slice(SALT_BYTES + INITIALIZATION_VECTOR_BYTES),
 			);
-			const contents: SealedContents = JSON.parse(decoder.decode(plaintext));
+
+			const contents = parseContents(safeParseJson(decoder.decode(plaintext)));
+
+			if (contents === undefined) {
+				return { reason: AUDIT_REASONS.undecryptable };
+			}
 
 			return Date.now() < contents.expiresAtMilliseconds
 				? { payload: contents.payload }
@@ -240,15 +280,18 @@ export function createSealer(options: SealerOptions): Sealer {
 
 			const salt = randomBytes(SALT_BYTES);
 			const initializationVector = randomBytes(INITIALIZATION_VECTOR_BYTES);
+
 			const contents: SealedContents = {
 				payload: own(input, "payload") ?? {},
 				expiresAtMilliseconds: Date.now() + input.timeToLiveMilliseconds,
 			};
+
 			const ciphertext = await crypto.subtle.encrypt(
 				{ name: "AES-GCM", iv: initializationVector },
 				await deriveMessageKey(await currentKey, salt, input.purpose),
 				encoder.encode(JSON.stringify(contents)),
 			);
+
 			return `${currentSecret.version}.${toBase64Url(
 				new Uint8Array([
 					...salt,

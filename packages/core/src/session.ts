@@ -23,9 +23,7 @@ export function issueSession(decision: unknown): Result<Session> {
 	}
 
 	return succeed(
-		bornSessions.mint(
-			Object.freeze({ id: generateSecret(), subject: decision.subject }),
-		),
+		bornSessions.mint({ id: generateSecret(), subject: decision.subject }),
 	);
 }
 

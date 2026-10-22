@@ -11,26 +11,26 @@ import type { CanonicalEmail } from "./canonical-email.js";
  */
 export type IdentityStore = {
 	findSubject(
-		tenantId: string,
+		tenant: string,
 		provider: string,
 		externalId: string,
 	): Promise<string | undefined>;
 	findSubjectByVerifiedEmail(
-		tenantId: string,
+		tenant: string,
 		email: CanonicalEmail,
 	): Promise<string | undefined>;
 	createSubject(
-		tenantId: string,
+		tenant: string,
 		identity: IdentityClaims,
-	): Promise<{ readonly subjectId: string; readonly created: boolean }>;
+	): Promise<{ readonly subjectId: string; readonly isNew: boolean }>;
 	linkIdentity(
-		tenantId: string,
+		tenant: string,
 		subjectId: string,
 		identity: IdentityClaims,
 	): Promise<string>;
 	/** The subjects of the tenant that claimed the email without verifying it. */
 	findSubjectsByUnverifiedEmail(
-		tenantId: string,
+		tenant: string,
 		email: CanonicalEmail,
 	): Promise<readonly string[]>;
 	/**
@@ -39,10 +39,10 @@ export type IdentityStore = {
 	 * left with no identity, and returns every subject it touched.
 	 */
 	removeUnverifiedEmailClaims(
-		tenantId: string,
+		tenant: string,
 		email: CanonicalEmail,
 		keepSubjectId: string,
 	): Promise<readonly string[]>;
 	/** Deletes the subject with all its identities; `false` when the tenant has no such subject. */
-	deleteSubject(tenantId: string, subjectId: string): Promise<boolean>;
+	deleteSubject(tenant: string, subjectId: string): Promise<boolean>;
 };

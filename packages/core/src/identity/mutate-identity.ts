@@ -2,19 +2,35 @@ import {
 	AUDIT_EVENTS,
 	AUDIT_OUTCOMES,
 	AUDIT_REASONS,
+	type AuditOutcome,
 	type AuditSink,
 	report,
 } from "../audit.js";
 import { ERROR_CODES } from "../errors.js";
 import { isMintedProof } from "../proof.js";
 import { fail, type Result, succeed } from "../result.js";
-import type { SessionTokens } from "../session-tokens/session-tokens.js";
+import {
+	REVOCATION_SCOPES,
+	type SessionTokens,
+} from "../session-tokens/session-tokens.js";
+import type { ValueOf } from "../shared/value-of.js";
 import type { IdentityStore } from "./identity-store.js";
+
+/** The kinds of change `mutateIdentity` makes. */
+export const IDENTITY_CHANGE_TYPES = {
+	confirmEmail: "confirm-email",
+	delete: "delete",
+} as const;
+
+type IdentityChangeType = ValueOf<typeof IDENTITY_CHANGE_TYPES>;
 
 /** What to change about a subject. */
 export type IdentityChange =
-	| { readonly type: "delete" }
-	| { readonly type: "confirm-email"; readonly proof: unknown };
+	| { readonly type: typeof IDENTITY_CHANGE_TYPES.delete }
+	| {
+			readonly type: typeof IDENTITY_CHANGE_TYPES.confirmEmail;
+			readonly proof: unknown;
+	  };
 
 /** Everything a change touched besides the subject itself. */
 export type MutationOutcome = {
@@ -30,10 +46,15 @@ export type MutateIdentityOptions = {
 
 /** Changes a subject of a tenant, with every consequence, and reports the subjects it touched. */
 export type MutateIdentity = (
-	tenantId: string,
-	subjectId: string,
+	tenant: string,
+	subject: string,
 	change: IdentityChange,
 ) => Promise<Result<MutationOutcome>>;
+
+type MutationDetail = {
+	readonly change: IdentityChangeType;
+	readonly evicted?: string;
+};
 
 /**
  * Creates `mutateIdentity`, the only place an identity is deleted or an email
@@ -56,53 +77,56 @@ export function createMutateIdentity(
 	options: MutateIdentityOptions,
 ): MutateIdentity {
 	const { store, sessionTokens, audit } = options;
+
 	const record = (
-		outcome: typeof AUDIT_OUTCOMES.success | typeof AUDIT_OUTCOMES.refusal,
+		outcome: AuditOutcome,
 		reason: string,
-		tenantId: string,
-		subjectId: string,
-		detail: Readonly<Record<string, string>>,
+		tenant: string,
+		subject: string,
+		detail: MutationDetail,
 	) => {
 		return report(audit, {
 			event: AUDIT_EVENTS.identityMutate,
 			outcome,
 			reason,
-			tenant: tenantId,
-			subject: subjectId,
+			tenant,
+			subject,
 			detail,
 		});
 	};
-	const revokeUser = (tenantId: string, subjectId: string) => {
+
+	const revokeUser = (tenant: string, subject: string) => {
 		return sessionTokens.revoke({
-			tenant: tenantId,
-			scope: "user",
-			id: subjectId,
+			tenant,
+			scope: REVOCATION_SCOPES.user,
+			id: subject,
 		});
 	};
+
 	const refuse = async (
 		reason: string,
 		code: string,
-		tenantId: string,
-		subjectId: string,
-		change: string,
+		tenant: string,
+		subject: string,
+		change: IdentityChangeType,
 	) => {
-		await record(AUDIT_OUTCOMES.refusal, reason, tenantId, subjectId, {
-			change,
-		});
+		await record(AUDIT_OUTCOMES.refusal, reason, tenant, subject, { change });
 
 		return fail(code);
 	};
 
-	return async (tenantId, subjectId, change) => {
-		if (change.type === "delete") {
-			await revokeUser(tenantId, subjectId);
+	return async (tenant, subject, change) => {
+		if (change.type === IDENTITY_CHANGE_TYPES.delete) {
+			await revokeUser(tenant, subject);
 
-			if (!(await store.deleteSubject(tenantId, subjectId))) {
+			const deleted = await store.deleteSubject(tenant, subject);
+
+			if (!deleted) {
 				return refuse(
 					AUDIT_REASONS.notFound,
 					ERROR_CODES.noSubject,
-					tenantId,
-					subjectId,
+					tenant,
+					subject,
 					change.type,
 				);
 			}
@@ -110,12 +134,12 @@ export function createMutateIdentity(
 			await record(
 				AUDIT_OUTCOMES.success,
 				AUDIT_REASONS.deleted,
-				tenantId,
-				subjectId,
+				tenant,
+				subject,
 				{ change: change.type },
 			);
 
-			return succeed({ affectedSubjects: [subjectId] });
+			return succeed({ affectedSubjects: [subject] });
 		}
 
 		const { proof } = change;
@@ -124,8 +148,8 @@ export function createMutateIdentity(
 			return refuse(
 				AUDIT_REASONS.noProof,
 				ERROR_CODES.noProof,
-				tenantId,
-				subjectId,
+				tenant,
+				subject,
 				change.type,
 			);
 		}
@@ -136,48 +160,54 @@ export function createMutateIdentity(
 			return refuse(
 				AUDIT_REASONS.unverified,
 				ERROR_CODES.forbidden,
-				tenantId,
-				subjectId,
+				tenant,
+				subject,
 				change.type,
 			);
 		}
 
-		if (
-			(await store.findSubjectByVerifiedEmail(tenantId, claims.email)) !==
-			subjectId
-		) {
+		const owner = await store.findSubjectByVerifiedEmail(tenant, claims.email);
+
+		if (owner !== subject) {
 			return refuse(
 				AUDIT_REASONS.notOwner,
 				ERROR_CODES.forbidden,
-				tenantId,
-				subjectId,
+				tenant,
+				subject,
 				change.type,
 			);
 		}
 
-		const claimants = (
-			await store.findSubjectsByUnverifiedEmail(tenantId, claims.email)
-		).filter((claimant) => claimant !== subjectId);
+		const claimants = await store.findSubjectsByUnverifiedEmail(
+			tenant,
+			claims.email,
+		);
+		const earlierClaimants = claimants.filter(
+			(claimant) => claimant !== subject,
+		);
 
-		for (const claimant of claimants) {
-			await revokeUser(tenantId, claimant);
+		for (const claimant of earlierClaimants) {
+			await revokeUser(tenant, claimant);
 		}
 
 		const evicted = await store.removeUnverifiedEmailClaims(
-			tenantId,
+			tenant,
 			claims.email,
-			subjectId,
+			subject,
+		);
+		const lateClaimants = evicted.filter(
+			(claimant) => !earlierClaimants.includes(claimant),
 		);
 
-		for (const late of evicted.filter((id) => !claimants.includes(id))) {
-			await revokeUser(tenantId, late);
+		for (const claimant of lateClaimants) {
+			await revokeUser(tenant, claimant);
 		}
 
 		await record(
 			AUDIT_OUTCOMES.success,
 			AUDIT_REASONS.emailConfirmed,
-			tenantId,
-			subjectId,
+			tenant,
+			subject,
 			{ change: change.type, evicted: String(evicted.length) },
 		);
 
