@@ -27,11 +27,16 @@ export type MeterRule = {
 	readonly windowMilliseconds: number;
 };
 
-/** Why a request was refused and when to ask again. */
-export type MeterRefusal = {
-	readonly code: typeof ERROR_CODES.rateLimited;
-	readonly resetsAtMilliseconds: number;
-};
+/**
+ * Why a request was refused: over the limit, with the moment to ask again, or
+ * (only through a remote client) because the service could not be reached.
+ */
+export type MeterRefusal =
+	| {
+			readonly code: typeof ERROR_CODES.rateLimited;
+			readonly resetsAtMilliseconds: number;
+	  }
+	| { readonly code: typeof ERROR_CODES.unavailable };
 
 /** What `observe` saw: the reading, and whether `consume` would have refused. */
 export type MeterObservation = MeterReading & {

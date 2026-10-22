@@ -239,6 +239,15 @@ importers:
         specifier: workspace:*
         version: link:../core
 
+  packages/service:
+    devDependencies:
+      '@vow-auth/adapter-memory':
+        specifier: workspace:*
+        version: link:../adapter-memory
+      '@vow-auth/core':
+        specifier: workspace:*
+        version: link:../core
+
   packages/store-contracts:
     devDependencies:
       '@vow-auth/core':

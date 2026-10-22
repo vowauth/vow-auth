@@ -365,12 +365,14 @@ export async function createPlayground(): Promise<Playground> {
 							);
 
 				if (allowance !== undefined && !allowance.ok) {
-					return respond(429, {
-						error: allowance.error.code,
-						retryAfterSeconds: Math.ceil(
-							(allowance.error.resetsAtMilliseconds - Date.now()) / 1_000,
-						),
-					});
+					return allowance.error.code === "rate-limited"
+						? respond(429, {
+								error: allowance.error.code,
+								retryAfterSeconds: Math.ceil(
+									(allowance.error.resetsAtMilliseconds - Date.now()) / 1_000,
+								),
+							})
+						: respond(503, { error: allowance.error.code });
 				}
 
 				const result = await emailLink.challenge(email);

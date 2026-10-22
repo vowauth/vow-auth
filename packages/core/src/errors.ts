@@ -12,6 +12,7 @@ export const ERROR_CODES = {
 	noAllow: "no-allow",
 	noProof: "no-proof",
 	rateLimited: "rate-limited",
+	unavailable: "unavailable",
 	noSubject: "no-subject",
 	noSession: "no-session",
 } as const;

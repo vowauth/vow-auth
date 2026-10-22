@@ -13,6 +13,9 @@ export default defineConfig({
 			"@vow-auth/adapter-memory": fileURLToPath(
 				new URL("./packages/adapter-memory/src/index.ts", import.meta.url),
 			),
+			"@vow-auth/service": fileURLToPath(
+				new URL("./packages/service/src/index.ts", import.meta.url),
+			),
 			"@vow-auth/store-contracts": fileURLToPath(
 				new URL("./packages/store-contracts/src/index.ts", import.meta.url),
 			),
