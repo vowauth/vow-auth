@@ -1,7 +1,7 @@
+import { hasControlOrSpace } from "../shared/has-control-or-space.js";
+
 const LOCAL_PART = /^[\p{L}\p{N}!#$%&'*+/=?^_`{|}~.-]+$/u;
 const FORBIDDEN_DOMAIN_CHARACTERS = new Set(":/?#[]\\%");
-const LAST_CODE_UNIT_OF_CONTROL_RANGE = 0x20;
-const DELETE_CODE_UNIT = 0x7f;
 const MAXIMUM_INPUT_CHARACTERS = 1_024;
 const MAXIMUM_ADDRESS_BYTES = 254;
 const MAXIMUM_LOCAL_PART_BYTES = 64;
@@ -11,21 +11,6 @@ const MAXIMUM_LABEL_BYTES = 63;
 const encoder = new TextEncoder();
 
 const byteLength = (text: string): number => encoder.encode(text).length;
-
-const hasControlOrSpace = (text: string): boolean => {
-	for (let index = 0; index < text.length; index += 1) {
-		const codeUnit = text.charCodeAt(index);
-
-		if (
-			codeUnit <= LAST_CODE_UNIT_OF_CONTROL_RANGE ||
-			codeUnit === DELETE_CODE_UNIT
-		) {
-			return true;
-		}
-	}
-
-	return false;
-};
 
 const isValidLocalPart = (local: string): boolean => {
 	return (

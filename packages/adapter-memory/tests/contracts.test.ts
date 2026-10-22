@@ -1,11 +1,15 @@
 import {
 	createMemoryEpochStore,
+	createMemoryIdentityStore,
 	createMemoryMeterStore,
+	createMemoryOutboxStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
 import {
 	epochStoreContract,
+	identityStoreContract,
 	meterStoreContract,
+	outboxStoreContract,
 	type StoreClock,
 	tokenStoreContract,
 } from "@vow-auth/store-contracts";
@@ -51,5 +55,12 @@ tokenStoreContract("memory", {
 		store: createMemoryTokenStore({ maximumBytes: 2_000 }),
 		policy: "refuse-new",
 	}),
+	clock,
+});
+
+identityStoreContract("memory", { create: () => createMemoryIdentityStore() });
+
+outboxStoreContract("memory", {
+	create: () => createMemoryOutboxStore(),
 	clock,
 });

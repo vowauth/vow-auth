@@ -95,3 +95,13 @@ export { isStoreFullError, storeFullError } from "./store-full.js";
 export type { StoreStats } from "./store-stats.js";
 export type { TokenRecord, TokenStore } from "./tokens/token-store.js";
 export type { IssueTokenInput, Tokens } from "./tokens/tokens.js";
+export {
+	createOutboundGuard,
+	type OutboundGuard,
+	type OutboundGuardOptions,
+} from "./transport/outbound-guard.js";
+export { isPublicAddress } from "./transport/public-address.js";
+export {
+	createRedirectPolicy,
+	type RedirectPolicyOptions,
+} from "./transport/redirect-policy.js";
