@@ -39,7 +39,10 @@ const probe = async (
 	response: unknown,
 ): Promise<Finding | undefined> => {
 	try {
-		const outcome = await factor.verify(response);
+		const outcome = await factor.verify(response, {
+			tenant: "doctor",
+			proofs: [],
+		});
 
 		if (outcome.ok && looksLikeClaims(outcome.value)) {
 			return {

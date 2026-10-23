@@ -30,7 +30,8 @@ window.FLOW_DATA = {
 		"EpochStore",
 		"TokenStore",
 		"MeterStore",
-		"OutboxStore"
+		"OutboxStore",
+		"TotpStore"
 	],
 	"flows": [
 		{
@@ -152,7 +153,7 @@ window.FLOW_DATA = {
 					"text": "Фактор плагина → Proof.",
 					"source": {
 						"file": "packages/core/src/proof.ts",
-						"line": 138
+						"line": 155
 					}
 				},
 				{
@@ -635,7 +636,7 @@ window.FLOW_DATA = {
 					"text": "continuation приходит только на втором шаге step-up. Без него идёт первый шаг.",
 					"source": {
 						"file": "packages/core/src/sign-in.ts",
-						"line": 415
+						"line": 419
 					}
 				},
 				{
@@ -662,7 +663,7 @@ window.FLOW_DATA = {
 					],
 					"source": {
 						"file": "packages/core/src/proof.ts",
-						"line": 138
+						"line": 155
 					}
 				},
 				{
@@ -1148,7 +1149,7 @@ window.FLOW_DATA = {
 					"input": "{ tenant, device, factor (второй), response, continuation }",
 					"source": {
 						"file": "packages/core/src/sign-in.ts",
-						"line": 347
+						"line": 348
 					}
 				},
 				{
@@ -1166,7 +1167,7 @@ window.FLOW_DATA = {
 					],
 					"source": {
 						"file": "packages/core/src/sign-in.ts",
-						"line": 352
+						"line": 353
 					}
 				},
 				{
@@ -1206,7 +1207,7 @@ window.FLOW_DATA = {
 					],
 					"source": {
 						"file": "packages/core/src/proof.ts",
-						"line": 138
+						"line": 155
 					}
 				},
 				{
@@ -1718,6 +1719,422 @@ window.FLOW_DATA = {
 					"from": "sign-in",
 					"to": "token",
 					"label": "вход",
+					"kind": "ok"
+				}
+			]
+		},
+		{
+			"id": "totp-enroll",
+			"group": "Вход",
+			"title": "TOTP: подключение",
+			"summary": "Человек уже вошёл и подключает приложение-аутентификатор в два шага: сначала секрет, потом первый код. Пока код не введён, фактор не работает.",
+			"nodes": [
+				{
+					"id": "start",
+					"kind": "start",
+					"title": "totp.begin({ tenant, subject, account })",
+					"fn": "totp.begin",
+					"input": "tenant, subject, account",
+					"output": "Result<{ secret, uri }>",
+					"source": {
+						"file": "packages/factor-totp/src/totp.ts",
+						"line": 218
+					}
+				},
+				{
+					"id": "exists",
+					"kind": "decision",
+					"title": "Подтверждённое подключение уже есть?",
+					"text": "Тогда сначала remove: так чужая сессия не подменит секрет молча. Неподтверждённое подключение заменяется новым секретом."
+				},
+				{
+					"id": "forbidden",
+					"kind": "end-fail",
+					"title": "forbidden",
+					"codes": [
+						"forbidden"
+					]
+				},
+				{
+					"id": "seal",
+					"kind": "step",
+					"title": "Секрет запечатан",
+					"fn": "sealer.seal",
+					"text": "20 случайных байт, в запись кладётся только запечатанное значение с привязкой к tenant и subject. Время жизни задаёт приложение (secretTimeToLive).",
+					"source": {
+						"file": "packages/core/src/sealer.ts",
+						"line": 22
+					}
+				},
+				{
+					"id": "save",
+					"kind": "port",
+					"title": "Сохранить неподтверждённую запись",
+					"fn": "TotpStore.save",
+					"port": "TotpStore.save(tenant, subject, record)",
+					"source": {
+						"file": "packages/factor-totp/src/store.ts",
+						"line": 18
+					}
+				},
+				{
+					"id": "shown",
+					"kind": "end-ok",
+					"title": "Секрет и адрес для QR-кода",
+					"text": "Показывается один раз. QR рисуйте у себя: адрес содержит секрет."
+				},
+				{
+					"id": "c-start",
+					"kind": "start",
+					"title": "totp.confirm({ code })",
+					"fn": "totp.confirm",
+					"source": {
+						"file": "packages/factor-totp/src/totp.ts",
+						"line": 258
+					}
+				},
+				{
+					"id": "c-limit",
+					"kind": "decision",
+					"title": "Лимит попыток",
+					"text": "Шесть цифр угадываются, поэтому лимит обязателен: лимитер или явное off."
+				},
+				{
+					"id": "c-limited",
+					"kind": "end-fail",
+					"title": "rate-limited",
+					"codes": [
+						"rate-limited"
+					]
+				},
+				{
+					"id": "c-check",
+					"kind": "decision",
+					"title": "Код сходится в окне ±1 шаг?",
+					"fn": "findStep",
+					"text": "HMAC-SHA-1, 6 цифр, шаг 30 с (RFC 6238). Все три кода окна считаются и сравниваются одинаково, время не выдаёт близкий.",
+					"source": {
+						"file": "packages/factor-totp/src/otp.ts",
+						"line": 67
+					}
+				},
+				{
+					"id": "c-bad",
+					"kind": "end-fail",
+					"title": "invalid-proof",
+					"codes": [
+						"invalid-proof"
+					]
+				},
+				{
+					"id": "c-advance",
+					"kind": "port",
+					"title": "Принять шаг один раз",
+					"fn": "TotpStore.advance",
+					"port": "TotpStore.advance(tenant, subject, step)",
+					"text": "Атомарно: шаг принимается, только если он выше последнего принятого. Код, который подтвердил подключение, войти уже не поможет.",
+					"source": {
+						"file": "packages/factor-totp/src/store.ts",
+						"line": 18
+					}
+				},
+				{
+					"id": "c-codes",
+					"kind": "step",
+					"title": "10 резервных кодов",
+					"fn": "generateBackupCodes",
+					"text": "По 128 бит (NIST разрешает простой хэш от 112 бит). В хранилище только SHA-256, сами коды показываются один раз.",
+					"source": {
+						"file": "packages/factor-totp/src/backup-codes.ts",
+						"line": 41
+					}
+				},
+				{
+					"id": "c-save",
+					"kind": "port",
+					"title": "Пометить подтверждённым",
+					"fn": "TotpStore.save",
+					"port": "TotpStore.save(tenant, subject, record)"
+				},
+				{
+					"id": "c-ok",
+					"kind": "end-ok",
+					"title": "Резервные коды"
+				}
+			],
+			"edges": [
+				{
+					"from": "start",
+					"to": "exists",
+					"label": "",
+					"kind": "ok"
+				},
+				{
+					"from": "exists",
+					"to": "forbidden",
+					"label": "да",
+					"kind": "fail"
+				},
+				{
+					"from": "exists",
+					"to": "seal",
+					"label": "нет",
+					"kind": "ok"
+				},
+				{
+					"from": "seal",
+					"to": "save",
+					"label": "",
+					"kind": "ok"
+				},
+				{
+					"from": "save",
+					"to": "shown",
+					"label": "",
+					"kind": "ok"
+				},
+				{
+					"from": "c-start",
+					"to": "c-limit",
+					"label": "",
+					"kind": "ok"
+				},
+				{
+					"from": "c-limit",
+					"to": "c-limited",
+					"label": "выше предела",
+					"kind": "fail"
+				},
+				{
+					"from": "c-limit",
+					"to": "c-check",
+					"label": "в пределах или off",
+					"kind": "ok"
+				},
+				{
+					"from": "c-check",
+					"to": "c-bad",
+					"label": "нет",
+					"kind": "fail"
+				},
+				{
+					"from": "c-check",
+					"to": "c-advance",
+					"label": "да",
+					"kind": "ok"
+				},
+				{
+					"from": "c-advance",
+					"to": "c-bad",
+					"label": "шаг уже принят",
+					"kind": "fail"
+				},
+				{
+					"from": "c-advance",
+					"to": "c-codes",
+					"label": "принят",
+					"kind": "ok"
+				},
+				{
+					"from": "c-codes",
+					"to": "c-save",
+					"label": "",
+					"kind": "ok"
+				},
+				{
+					"from": "c-save",
+					"to": "c-ok",
+					"label": "",
+					"kind": "ok"
+				}
+			]
+		},
+		{
+			"id": "totp-verify",
+			"group": "Вход",
+			"title": "TOTP: второй шаг входа",
+			"summary": "Фактор работает только вторым шагом step-up. Кто это, говорит не клиент: ядро передаёт субъекта и уже пройденные доказательства, фактор возвращает утверждения первого из них.",
+			"nodes": [
+				{
+					"id": "start",
+					"kind": "start",
+					"title": "signIn с continuation и фактором totp",
+					"fn": "totp.factor.verify",
+					"input": "response: { code } или { backupCode }; context: { tenant, subject, proofs }",
+					"output": "утверждения первого доказательства",
+					"source": {
+						"file": "packages/factor-totp/src/totp.ts",
+						"line": 167
+					}
+				},
+				{
+					"id": "subject",
+					"kind": "decision",
+					"title": "Субъект и прошлое доказательство есть?",
+					"text": "Первым шагом контекст пуст, поэтому TOTP не заменяет вход: он не знает, кто человек."
+				},
+				{
+					"id": "bad",
+					"kind": "end-fail",
+					"title": "invalid-proof",
+					"codes": [
+						"invalid-proof"
+					]
+				},
+				{
+					"id": "limit",
+					"kind": "decision",
+					"title": "Лимит попыток",
+					"text": "Один и тот же код нельзя подбирать бесконечно, даже если каждый подбор требует полного первого шага."
+				},
+				{
+					"id": "limited",
+					"kind": "end-fail",
+					"title": "rate-limited",
+					"codes": [
+						"rate-limited"
+					]
+				},
+				{
+					"id": "find",
+					"kind": "port",
+					"title": "Запись человека",
+					"fn": "TotpStore.find",
+					"port": "TotpStore.find(tenant, subject)",
+					"text": "Нет записи или подключение не подтверждено: тот же отказ, что и за неверный код."
+				},
+				{
+					"id": "kind",
+					"kind": "decision",
+					"title": "Резервный код или код приложения?"
+				},
+				{
+					"id": "backup",
+					"kind": "port",
+					"title": "Потратить резервный код",
+					"fn": "TotpStore.spendBackupCode",
+					"port": "TotpStore.spendBackupCode(tenant, subject, hash)",
+					"text": "Атомарно: из двух одновременных попыток с одним кодом успех у одной. Регистр, пробелы и дефисы не важны.",
+					"source": {
+						"file": "packages/factor-totp/src/store.ts",
+						"line": 18
+					}
+				},
+				{
+					"id": "open",
+					"kind": "step",
+					"title": "Открыть секрет и найти шаг",
+					"fn": "findStep",
+					"text": "Печать привязана к tenant и subject: запись, скопированная к другому человеку, не открывается."
+				},
+				{
+					"id": "advance",
+					"kind": "port",
+					"title": "Принять шаг один раз",
+					"fn": "TotpStore.advance",
+					"port": "TotpStore.advance(tenant, subject, step)",
+					"text": "Повтор того же кода, и более старого, отвергается (RFC 6238: MUST NOT)."
+				},
+				{
+					"id": "done",
+					"kind": "jump",
+					"title": "Дальше ядро",
+					"text": "Ядро проверяет, что личность та же, что у первого шага, и спрашивает политику.",
+					"jump": {
+						"flow": "sign-in-step-up",
+						"node": "start"
+					}
+				}
+			],
+			"edges": [
+				{
+					"from": "start",
+					"to": "subject",
+					"label": "",
+					"kind": "ok"
+				},
+				{
+					"from": "subject",
+					"to": "bad",
+					"label": "нет",
+					"kind": "fail"
+				},
+				{
+					"from": "subject",
+					"to": "limit",
+					"label": "да",
+					"kind": "ok"
+				},
+				{
+					"from": "limit",
+					"to": "limited",
+					"label": "выше предела",
+					"kind": "fail"
+				},
+				{
+					"from": "limit",
+					"to": "find",
+					"label": "в пределах или off",
+					"kind": "ok"
+				},
+				{
+					"from": "find",
+					"to": "bad",
+					"label": "нет записи",
+					"kind": "fail"
+				},
+				{
+					"from": "find",
+					"to": "kind",
+					"label": "",
+					"kind": "ok"
+				},
+				{
+					"from": "kind",
+					"to": "backup",
+					"label": "резервный код",
+					"kind": "ok"
+				},
+				{
+					"from": "kind",
+					"to": "open",
+					"label": "код приложения",
+					"kind": "ok"
+				},
+				{
+					"from": "backup",
+					"to": "bad",
+					"label": "нет такого",
+					"kind": "fail"
+				},
+				{
+					"from": "backup",
+					"to": "done",
+					"label": "потрачен",
+					"kind": "ok"
+				},
+				{
+					"from": "open",
+					"to": "bad",
+					"label": "не сошёлся",
+					"kind": "fail"
+				},
+				{
+					"from": "open",
+					"to": "advance",
+					"label": "сошёлся",
+					"kind": "ok"
+				},
+				{
+					"from": "advance",
+					"to": "bad",
+					"label": "шаг уже принят",
+					"kind": "fail"
+				},
+				{
+					"from": "advance",
+					"to": "done",
+					"label": "принят",
 					"kind": "ok"
 				}
 			]

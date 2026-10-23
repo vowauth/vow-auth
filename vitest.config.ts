@@ -37,6 +37,9 @@ export default defineConfig({
 			"@vow-auth/factor-email-link": fileURLToPath(
 				new URL("./packages/factor-email-link/src/index.ts", import.meta.url),
 			),
+			"@vow-auth/factor-totp": fileURLToPath(
+				new URL("./packages/factor-totp/src/index.ts", import.meta.url),
+			),
 			"@vow-auth/adapter-redis": fileURLToPath(
 				new URL("./packages/adapter-redis/src/index.ts", import.meta.url),
 			),

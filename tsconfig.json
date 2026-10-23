@@ -18,7 +18,8 @@
 			"@vow-auth/authorize": ["./packages/authorize/src/index.ts"],
 			"@vow-auth/factor-email-link": [
 				"./packages/factor-email-link/src/index.ts"
-			]
+			],
+			"@vow-auth/factor-totp": ["./packages/factor-totp/src/index.ts"]
 		}
 	},
 	"include": [

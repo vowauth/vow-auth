@@ -302,6 +302,7 @@ export function createSignIn(options: SignInOptions): SignIn {
 		const { tenant, device } = request;
 		const proof = await verifyProof(request.factor, request.response, {
 			audit,
+			context: { tenant, proofs: [] },
 		});
 
 		if (!proof.ok) {
@@ -380,7 +381,10 @@ export function createSignIn(options: SignInOptions): SignIn {
 			);
 		}
 
-		const proof = await verifyProof(factor, request.response, { audit });
+		const proof = await verifyProof(factor, request.response, {
+			audit,
+			context: { tenant, subject, proofs: earlier },
+		});
 
 		if (!proof.ok) {
 			return fail(proof.error);

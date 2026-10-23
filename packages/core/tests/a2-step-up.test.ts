@@ -493,3 +493,43 @@ test("A2: the second step must use the factor that was asked for, not the first 
 		}),
 	).toEqual({ ok: false, error: "invalid-proof" });
 });
+
+test("the first step gives a factor the tenant and nothing else, the second the subject and the proofs so far", async () => {
+	const { auth, enroll } = createFixture();
+	const subject = await enroll("alice-totp", "alice@example.com");
+	const contexts: unknown[] = [];
+	const watching = (factor: Factor): Factor => ({
+		...factor,
+		verify: async (response, context) => {
+			contexts.push(context);
+
+			return factor.verify(response, context);
+		},
+	});
+
+	const challenge = stepUpOf(
+		await auth.signIn({
+			tenant: "acme",
+			device: "laptop",
+			factor: watching(emailFactor),
+			response: { email: "alice@example.com" },
+		}),
+	);
+
+	await auth.signIn({
+		tenant: "acme",
+		device: "laptop",
+		factor: watching(totpFactor),
+		response: { user: "alice-totp", code: GOOD_CODE },
+		continuation: challenge.continuation,
+	});
+
+	expect(contexts).toEqual([
+		{ tenant: "acme", proofs: [] },
+		{
+			tenant: "acme",
+			subject,
+			proofs: [expect.objectContaining({ factor: "email" })],
+		},
+	]);
+});

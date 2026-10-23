@@ -56,11 +56,26 @@ export type Proof = {
 export type Factor = {
 	readonly id: string;
 	readonly strength: ProofStrength;
-	verify(response: unknown): Promise<Result<unknown>>;
+	verify(response: unknown, context: FactorContext): Promise<Result<unknown>>;
+};
+
+/**
+ * What the sign in knows when it asks a factor to verify. In the first step
+ * there is no subject and no proof yet. In the second step of a step-up the
+ * subject is the one the first factor identified and the proofs are the ones
+ * it has passed, so a second factor can look up what it holds for that
+ * subject and return the claims of an earlier proof, instead of trusting the
+ * client to say who it is.
+ */
+export type FactorContext = {
+	readonly tenant: string;
+	readonly subject?: string;
+	readonly proofs: readonly Proof[];
 };
 
 /** Options of `verifyProof`. */
 export type VerifyProofOptions = {
+	readonly context?: FactorContext;
 	readonly now?: () => number;
 	readonly audit?: AuditSink | undefined;
 };
@@ -71,6 +86,8 @@ const CLAIM_KEYS: readonly string[] = [
 	"email",
 	"emailVerified",
 ];
+
+const NO_CONTEXT: FactorContext = Object.freeze({ tenant: "", proofs: [] });
 
 const mintedProofs = createMintRegistry<Proof>();
 
@@ -158,7 +175,10 @@ export async function verifyProof(
 	let outcome: Result<unknown>;
 
 	try {
-		outcome = await factor.verify(response);
+		outcome = await factor.verify(
+			response,
+			own(options, "context") ?? NO_CONTEXT,
+		);
 	} catch {
 		return refuse(AUDIT_REASONS.factorError);
 	}

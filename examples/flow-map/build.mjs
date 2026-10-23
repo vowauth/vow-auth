@@ -13,6 +13,7 @@ const PORT_FILES = {
 	TokenStore: "packages/core/src/tokens/token-store.ts",
 	MeterStore: "packages/core/src/meter/meter-store.ts",
 	OutboxStore: "packages/core/src/outbox/outbox-store.ts",
+	TotpStore: "packages/factor-totp/src/store.ts",
 };
 const START_KINDS = new Set(["start"]);
 const END_KINDS = new Set(["end-ok", "end-fail", "end-wait"]);

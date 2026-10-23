@@ -81,6 +81,7 @@ export {
 export {
 	EMAIL_PROVIDER,
 	type Factor,
+	type FactorContext,
 	type IdentityClaims,
 	type Proof,
 	type ProofStrength,

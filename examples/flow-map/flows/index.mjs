@@ -11,6 +11,7 @@ import {
 } from "./sessions.mjs";
 import { signIn, signInStepUp } from "./sign-in.mjs";
 import { doctor, map, startup } from "./tools-and-map.mjs";
+import { totpEnroll, totpVerify } from "./totp.mjs";
 
 export { GROUPS };
 
@@ -20,6 +21,8 @@ export const flows = [
 	signInStepUp,
 	httpCookie,
 	httpBearer,
+	totpEnroll,
+	totpVerify,
 	sessionVerify,
 	revoke,
 	agentDelegate,
