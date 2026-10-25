@@ -526,7 +526,6 @@ test("a refusal still reaches the caller as a failure when the sink is down", as
 
 test("the core reports exactly the documented events", () => {
 	expect(Object.values(AUDIT_EVENTS).sort()).toEqual([
-		"authorize.check",
 		"delegation.grant",
 		"identity.mutate",
 		"identity.resolve",

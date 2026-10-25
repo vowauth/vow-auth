@@ -25,9 +25,6 @@ export default defineConfig({
 			"@vow-auth/store-contracts": fileURLToPath(
 				new URL("./packages/store-contracts/src/index.ts", import.meta.url),
 			),
-			"@vow-auth/authorize": fileURLToPath(
-				new URL("./packages/authorize/src/index.ts", import.meta.url),
-			),
 			"@vow-auth/factor-email-link": fileURLToPath(
 				new URL("./packages/factor-email-link/src/index.ts", import.meta.url),
 			),
@@ -40,6 +37,6 @@ export default defineConfig({
 		},
 	},
 	test: {
-		include: ["packages/*/tests/**/*.test.ts", "examples/*/tests/**/*.test.ts"],
+		include: ["packages/*/tests/**/*.test.ts"],
 	},
 });

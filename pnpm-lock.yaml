@@ -188,24 +188,6 @@ importers:
         specifier: ^5.0.3
         version: 5.0.3(@types/node@26.6.4)(vite@8.3.3(@types/node@26.6.4)(jiti@2.7.0)(yaml@2.9.1))
 
-  examples/playground:
-    dependencies:
-      '@vetojs/core':
-        specifier: ^1.2.0
-        version: 1.2.0
-      '@vow-auth/adapter-memory':
-        specifier: workspace:*
-        version: link:../../packages/adapter-memory
-      '@vow-auth/authorize':
-        specifier: workspace:*
-        version: link:../../packages/authorize
-      '@vow-auth/core':
-        specifier: workspace:*
-        version: link:../../packages/core
-      '@vow-auth/factor-email-link':
-        specifier: workspace:*
-        version: link:../../packages/factor-email-link
-
   packages/adapter-memory:
     devDependencies:
       '@vow-auth/core':
@@ -244,16 +226,6 @@ importers:
       '@vow-auth/test-support':
         specifier: workspace:*
         version: link:../test-support
-
-  packages/authorize:
-    dependencies:
-      '@vetojs/core':
-        specifier: ^1.2.0
-        version: 1.2.0
-    devDependencies:
-      '@vow-auth/core':
-        specifier: workspace:*
-        version: link:../core
 
   packages/core: {}
 
@@ -734,10 +706,6 @@ packages:
 
   '@types/pg@8.23.1':
     resolution: {integrity: sha512-fKVHpikPdg4GKks3JuLEhvwSyvwzF23hnabPy6DD8ljVbC7+6J5dQzdv4arV6jqq57djnMgs1HKBxX4P8aBI3A==}
-
-  '@vetojs/core@1.2.0':
-    resolution: {integrity: sha512-Q3OQmSKQBx20rP4Z6pTTUDNeb3j8DhF8734yN6tA4ONH1Ej6AOomSGlFtHeAS/NNfGGKkbgx/DXUtoQwdZNE3w==}
-    engines: {node: '>=22'}
 
   '@vitest/mocker@5.0.3':
     resolution: {integrity: sha512-T8sWAIbkSyAjkwTcaEc3Iu0o9A27X1/kdXrizhZkGuSKScRQtRzclfAMpOTcGdXCsqxeWlpGy3XjqaW8CpLORg==}
@@ -1397,8 +1365,6 @@ snapshots:
       '@types/node': 26.6.4
       pg-protocol: 1.16.1
       pg-types: 2.2.0
-
-  '@vetojs/core@1.2.0': {}
 
   '@vitest/mocker@5.0.3(vite@8.3.3(@types/node@26.6.4)(jiti@2.7.0)(yaml@2.9.1))':
     dependencies:

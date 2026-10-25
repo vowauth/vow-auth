@@ -14,7 +14,7 @@
 		"test": "pnpm build && pnpm typecheck:packages && vitest run",
 		"test:watch": "vitest",
 		"test:coverage": "vitest run --coverage",
-		"typecheck": "pnpm typecheck:packages && pnpm --filter \"./examples/*\" typecheck",
+		"typecheck": "pnpm typecheck:packages",
 		"typecheck:packages": "tsc -p tsconfig.json --noEmit",
 		"format": "biome format --write .",
 		"check": "biome check .",

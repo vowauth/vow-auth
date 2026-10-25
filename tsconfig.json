@@ -13,19 +13,12 @@
 			"@vow-auth/http": ["./packages/http/src/index.ts"],
 			"@vow-auth/test-support": ["./packages/test-support/src/index.ts"],
 			"@vow-auth/store-contracts": ["./packages/store-contracts/src/index.ts"],
-			"@vow-auth/authorize": ["./packages/authorize/src/index.ts"],
 			"@vow-auth/factor-email-link": [
 				"./packages/factor-email-link/src/index.ts"
 			],
 			"@vow-auth/factor-totp": ["./packages/factor-totp/src/index.ts"]
 		}
 	},
-	"include": [
-		"vitest.config.ts",
-		"packages/**/*.ts",
-		"packages/**/*.tsx",
-		"examples/*/src/**/*.ts",
-		"examples/*/tests/**/*.ts"
-	],
+	"include": ["vitest.config.ts", "packages/**/*.ts", "packages/**/*.tsx"],
 	"exclude": ["node_modules", "**/dist"]
 }
