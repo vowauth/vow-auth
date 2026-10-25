@@ -120,9 +120,11 @@ export function createCookieHandler(
 			answer(
 				200,
 				{
+					account: signedIn.account,
 					subject: signedIn.subject,
 					tenant: signedIn.tenant,
 					identity: signedIn.identity,
+					membership: signedIn.membership,
 					email: signedIn.email,
 				},
 				[serializeCookie(session, signedIn.token), ...choice.cookies],

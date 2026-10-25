@@ -3,12 +3,9 @@ import type { TotpRecord, TotpStore } from "./store.js";
 
 /** Options of the in-process store. */
 export type MemoryTotpStoreOptions = {
-	/** The most subjects it holds; a new subject over it is refused with a store full error, and no record is ever dropped to make room. */
+	/** The most accounts it holds; a new account over it is refused with a store full error, and no record is ever dropped to make room. */
 	readonly maximumRecords: number;
 };
-
-const keyOf = (tenant: string, subject: string): string =>
-	JSON.stringify([tenant, subject]);
 
 /**
  * In-process store for tests and for a single long-lived server. Records are
@@ -26,46 +23,42 @@ export function createMemoryTotpStore(
 	const records = new Map<string, TotpRecord>();
 
 	return {
-		async find(tenant, subject) {
-			const record = records.get(keyOf(tenant, subject));
+		async find(account) {
+			const record = records.get(account);
 
 			return record === undefined
 				? undefined
 				: { ...record, backupCodeHashes: [...record.backupCodeHashes] };
 		},
-		async save(tenant, subject, record) {
-			const key = keyOf(tenant, subject);
-
-			if (!records.has(key) && records.size >= maximumRecords) {
+		async save(account, record) {
+			if (!records.has(account) && records.size >= maximumRecords) {
 				throw storeFullError("The TOTP store is full");
 			}
 
-			records.set(key, {
+			records.set(account, {
 				...record,
 				backupCodeHashes: [...record.backupCodeHashes],
 			});
 		},
-		async advance(tenant, subject, step) {
-			const key = keyOf(tenant, subject);
-			const record = records.get(key);
+		async advance(account, step) {
+			const record = records.get(account);
 
 			if (record === undefined || step <= record.lastStep) {
 				return false;
 			}
 
-			records.set(key, { ...record, lastStep: step });
+			records.set(account, { ...record, lastStep: step });
 
 			return true;
 		},
-		async spendBackupCode(tenant, subject, hash) {
-			const key = keyOf(tenant, subject);
-			const record = records.get(key);
+		async spendBackupCode(account, hash) {
+			const record = records.get(account);
 
 			if (record === undefined || !record.backupCodeHashes.includes(hash)) {
 				return false;
 			}
 
-			records.set(key, {
+			records.set(account, {
 				...record,
 				backupCodeHashes: record.backupCodeHashes.filter(
 					(candidate) => candidate !== hash,
@@ -74,8 +67,8 @@ export function createMemoryTotpStore(
 
 			return true;
 		},
-		async remove(tenant, subject) {
-			return records.delete(keyOf(tenant, subject));
+		async remove(account) {
+			return records.delete(account);
 		},
 	};
 }

@@ -1,6 +1,6 @@
 import {
+	createMemoryAccountStore,
 	createMemoryEpochStore,
-	createMemoryIdentityStore,
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
@@ -81,7 +81,7 @@ const createFixture = (overrides: Partial<TotpOptions> = {}) => {
 				...overrides,
 			}),
 		},
-		identities: createMemoryIdentityStore(),
+		accounts: createMemoryAccountStore(),
 		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
 		tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 		meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
@@ -89,38 +89,41 @@ const createFixture = (overrides: Partial<TotpOptions> = {}) => {
 		maximumLifeTimeMilliseconds: 3_600_000,
 		sessionTimeToLiveMilliseconds: 1_800_000,
 		stepUpTimeToLiveMilliseconds: 300_000,
-		policy: ({ subject, proofs }) =>
-			enrolled.has(subject) && !proofs.some((proof) => proof.factor === "totp")
+		registration: () => "allow",
+		policy: ({ account, proofs }) =>
+			enrolled.has(account) && !proofs.some((proof) => proof.factor === "totp")
 				? requireFactor("totp")
 				: "allow",
 		audit: async () => undefined,
 	});
 	const totp = auth.factors.totp;
 
-	const firstStep = (address: string, device = "laptop") =>
-		auth.signIn({
+	const firstStep = async (address: string, device = "laptop") => {
+		await auth.tenants.create(TENANT);
+
+		return auth.signIn({
 			tenant: TENANT,
 			device,
 			factor: "email",
 			response: { email: address },
 		});
+	};
 
-	const subjectOf = async (address: string) => {
+	const accountOf = async (address: string) => {
 		const first = await firstStep(address);
 
 		if (!first.ok) {
 			throw new Error("the first sign in must pass");
 		}
 
-		return first.value.subject;
+		return first.value.account;
 	};
 
 	const enroll = async (address: string) => {
-		const subject = await subjectOf(address);
+		const account = await accountOf(address);
 		const begun = await totp.begin({
-			tenant: TENANT,
-			subject,
-			account: address,
+			account,
+			label: address,
 		});
 
 		if (!begun.ok) {
@@ -134,8 +137,7 @@ const createFixture = (overrides: Partial<TotpOptions> = {}) => {
 		}
 
 		const confirmed = await totp.confirm({
-			tenant: TENANT,
-			subject,
+			account,
 			code: await generateCode(secret, stepOf(Date.now())),
 		});
 
@@ -143,10 +145,10 @@ const createFixture = (overrides: Partial<TotpOptions> = {}) => {
 			throw new Error("confirm must pass");
 		}
 
-		enrolled.add(subject);
+		enrolled.add(account);
 		vi.setSystemTime(Date.now() + STEP_MILLISECONDS);
 
-		return { subject, secret, backupCodes: confirmed.value };
+		return { account, secret, backupCodes: confirmed.value };
 	};
 
 	const challengeFor = async (address: string, device = "laptop") => {
@@ -180,19 +182,18 @@ const createFixture = (overrides: Partial<TotpOptions> = {}) => {
 		enroll,
 		challengeFor,
 		secondStep,
-		subjectOf,
+		accountOf,
 		codeAt: (secret: Uint8Array<ArrayBuffer>, offsetSteps = 0) =>
 			generateCode(secret, stepOf(Date.now()) + offsetSteps),
 	};
 };
 
 test("an enrollment gives the secret and the address a QR code carries, and the store never holds the secret in the clear", async () => {
-	const { totp, store, subjectOf } = createFixture();
-	const subject = await subjectOf("a@x.test");
+	const { totp, store, accountOf } = createFixture();
+	const account = await accountOf("a@x.test");
 	const begun = await totp.begin({
-		tenant: TENANT,
-		subject,
-		account: "a@x.test",
+		account,
+		label: "a@x.test",
 	});
 
 	expect(begun.ok).toBe(true);
@@ -216,25 +217,24 @@ test("an enrollment gives the secret and the address a QR code carries, and the 
 		period: "30",
 	});
 
-	const record = await store.find(TENANT, subject);
+	const record = await store.find(account);
 
 	expect(record?.confirmed).toBe(false);
 	expect(JSON.stringify(record)).not.toContain(begun.value.secret);
 });
 
 test("an account or an issuer that would break the address is refused", async () => {
-	const { totp, subjectOf } = createFixture();
-	const subject = await subjectOf("a@x.test");
+	const { totp, accountOf } = createFixture();
+	const account = await accountOf("a@x.test");
 
-	expect(await totp.begin({ tenant: TENANT, subject, account: "" })).toEqual({
+	expect(await totp.begin({ account, label: "" })).toEqual({
 		ok: false,
 		error: "invalid-request",
 	});
 
 	const tricky = await totp.begin({
-		tenant: TENANT,
-		subject,
-		account: "a b&secret=evil#:x",
+		account,
+		label: "a b&secret=evil#:x",
 	});
 
 	expect(
@@ -254,12 +254,11 @@ test("an account or an issuer that would break the address is refused", async ()
 });
 
 test("a first code that is wrong leaves the enrollment unconfirmed, a right one confirms it and shows ten backup codes once", async () => {
-	const { totp, subjectOf, store, codeAt } = createFixture();
-	const subject = await subjectOf("a@x.test");
+	const { totp, accountOf, store, codeAt } = createFixture();
+	const account = await accountOf("a@x.test");
 	const begun = await totp.begin({
-		tenant: TENANT,
-		subject,
-		account: "a@x.test",
+		account,
+		label: "a@x.test",
 	});
 	const secret = decodeBase32(begun.ok ? begun.value.secret : "");
 
@@ -267,17 +266,14 @@ test("a first code that is wrong leaves the enrollment unconfirmed, a right one 
 		throw new Error("the secret must be base32");
 	}
 
-	expect(
-		await totp.confirm({ tenant: TENANT, subject, code: "000000" }),
-	).toEqual({
+	expect(await totp.confirm({ account, code: "000000" })).toEqual({
 		ok: false,
 		error: "invalid-proof",
 	});
-	expect((await store.find(TENANT, subject))?.confirmed).toBe(false);
+	expect((await store.find(account))?.confirmed).toBe(false);
 
 	const confirmed = await totp.confirm({
-		tenant: TENANT,
-		subject,
+		account,
 		code: await codeAt(secret),
 	});
 
@@ -289,14 +285,13 @@ test("a first code that is wrong leaves the enrollment unconfirmed, a right one 
 			),
 	).toBe(true);
 	expect(new Set(confirmed.ok ? confirmed.value : []).size).toBe(10);
-	expect((await store.find(TENANT, subject))?.confirmed).toBe(true);
+	expect((await store.find(account))?.confirmed).toBe(true);
 
-	expect(
-		await totp.confirm({ tenant: TENANT, subject, code: await codeAt(secret) }),
-	).toEqual({ ok: false, error: "invalid-request" });
-	expect(
-		await totp.begin({ tenant: TENANT, subject, account: "a@x.test" }),
-	).toEqual({
+	expect(await totp.confirm({ account, code: await codeAt(secret) })).toEqual({
+		ok: false,
+		error: "invalid-request",
+	});
+	expect(await totp.begin({ account, label: "a@x.test" })).toEqual({
 		ok: false,
 		error: "forbidden",
 	});
@@ -304,7 +299,7 @@ test("a first code that is wrong leaves the enrollment unconfirmed, a right one 
 
 test("the code that confirmed an enrollment cannot sign anyone in afterwards", async () => {
 	const { enroll, challengeFor, secondStep, codeAt, store } = createFixture();
-	const { subject, secret } = await enroll("a@x.test");
+	const { account, secret } = await enroll("a@x.test");
 
 	vi.setSystemTime(Date.now() - STEP_MILLISECONDS);
 
@@ -312,18 +307,16 @@ test("the code that confirmed an enrollment cannot sign anyone in afterwards", a
 	const continuation = await challengeFor("a@x.test");
 
 	expect((await secondStep(continuation, { code: replayed })).ok).toBe(false);
-	expect((await store.find(TENANT, subject))?.lastStep).toBe(
-		stepOf(Date.now()),
-	);
+	expect((await store.find(account))?.lastStep).toBe(stepOf(Date.now()));
 });
 
 test("a step-up with the right code signs in, and the session remembers both factors", async () => {
 	const { enroll, challengeFor, secondStep, codeAt, auth } = createFixture();
-	const { subject, secret } = await enroll("a@x.test");
+	const { account, secret } = await enroll("a@x.test");
 	const continuation = await challengeFor("a@x.test");
 	const done = await secondStep(continuation, { code: await codeAt(secret) });
 
-	expect(done.ok && done.value.subject).toBe(subject);
+	expect(done.ok && done.value.account).toBe(account);
 
 	const session = done.ok
 		? await auth.sessions.verify(done.value.token)
@@ -440,8 +433,8 @@ test("a backup code works once, whatever its case, spaces and dashes", async () 
 
 test("new backup codes replace the old ones", async () => {
 	const { enroll, challengeFor, secondStep, totp } = createFixture();
-	const { subject, backupCodes } = await enroll("a@x.test");
-	const renewed = await totp.renewBackupCodes({ tenant: TENANT, subject });
+	const { account, backupCodes } = await enroll("a@x.test");
+	const renewed = await totp.renewBackupCodes({ account });
 
 	expect(renewed.ok && renewed.value).toHaveLength(10);
 	expect(
@@ -458,9 +451,7 @@ test("new backup codes replace the old ones", async () => {
 			})
 		).ok,
 	).toBe(true);
-	expect(
-		await totp.renewBackupCodes({ tenant: TENANT, subject: "nobody" }),
-	).toEqual({
+	expect(await totp.renewBackupCodes({ account: "nobody" })).toEqual({
 		ok: false,
 		error: "invalid-request",
 	});
@@ -471,7 +462,7 @@ test("a code of one person does not sign another in", async () => {
 	const alice = await enroll("a@x.test");
 	const bob = await enroll("b@x.test");
 
-	expect(alice.subject).not.toBe(bob.subject);
+	expect(alice.account).not.toBe(bob.account);
 	expect(
 		(
 			await secondStep(await challengeFor("b@x.test"), {
@@ -495,26 +486,26 @@ test("a code of one person does not sign another in", async () => {
 	).toBe(true);
 });
 
-test("a sealed secret copied to another subject does not open", async () => {
+test("a sealed secret copied to another account does not open", async () => {
 	const {
 		enroll,
 		challengeFor,
 		secondStep,
 		codeAt,
 		store,
-		subjectOf,
+		accountOf,
 		enrolled,
 	} = createFixture();
 	const alice = await enroll("a@x.test");
-	const bobSubject = await subjectOf("b@x.test");
-	const record = await store.find(TENANT, alice.subject);
+	const bobAccount = await accountOf("b@x.test");
+	const record = await store.find(alice.account);
 
 	if (record === undefined) {
 		throw new Error("the record must exist");
 	}
 
-	await store.save(TENANT, bobSubject, record);
-	enrolled.add(bobSubject);
+	await store.save(bobAccount, record);
+	enrolled.add(bobAccount);
 
 	const continuation = await challengeFor("b@x.test");
 
@@ -537,18 +528,17 @@ test("the factor cannot be the first step: it does not say who the person is", a
 	).toEqual({ ok: false, error: "invalid-proof" });
 });
 
-test("a subject whose enrollment was never confirmed cannot pass with any code", async () => {
-	const { totp, enrolled, subjectOf, challengeFor, secondStep } =
+test("an account whose enrollment was never confirmed cannot pass with any code", async () => {
+	const { totp, enrolled, accountOf, challengeFor, secondStep } =
 		createFixture();
-	const subject = await subjectOf("a@x.test");
+	const account = await accountOf("a@x.test");
 	const begun = await totp.begin({
-		tenant: TENANT,
-		subject,
-		account: "a@x.test",
+		account,
+		label: "a@x.test",
 	});
 	const secret = decodeBase32(begun.ok ? begun.value.secret : "");
 
-	enrolled.add(subject);
+	enrolled.add(account);
 
 	expect(secret).toBeDefined();
 	expect(
@@ -558,12 +548,12 @@ test("a subject whose enrollment was never confirmed cannot pass with any code",
 	).toEqual({ ok: false, error: "invalid-proof" });
 });
 
-test("removing an enrollment ends the factor for that subject", async () => {
+test("removing an enrollment ends the factor for that account", async () => {
 	const { enroll, challengeFor, secondStep, codeAt, totp } = createFixture();
-	const { subject, secret } = await enroll("a@x.test");
+	const { account, secret } = await enroll("a@x.test");
 
-	expect(await totp.remove({ tenant: TENANT, subject })).toBe(true);
-	expect(await totp.remove({ tenant: TENANT, subject })).toBe(false);
+	expect(await totp.remove({ account })).toBe(true);
+	expect(await totp.remove({ account })).toBe(false);
 	expect(
 		(
 			await secondStep(await challengeFor("a@x.test"), {
@@ -573,12 +563,12 @@ test("removing an enrollment ends the factor for that subject", async () => {
 	).toBe(false);
 });
 
-test("a limit stops guessing for one subject and not for another", async () => {
+test("a limit stops guessing for one account and not for another", async () => {
 	const { enroll, challengeFor, secondStep, codeAt } = createFixture({
 		limit: {
 			rule: meterRuleOf({ limit: 3, windowMilliseconds: 600_000 }),
-			scopes: ({ tenant, subject, action }: TotpLimitInput) => [
-				{ tenant, actor: subject, resource: `totp:${action}` },
+			scopes: ({ account, action }: TotpLimitInput) => [
+				{ tenant: TENANT, actor: account, resource: `totp:${action}` },
 			],
 		},
 	});
@@ -617,4 +607,36 @@ test("a limit that is forgotten stops the factor from being built", () => {
 			}),
 		).toThrow(TypeError);
 	}
+});
+
+test("an enrollment belongs to the account, so it works in every tenant, and goes with the account", async () => {
+	const { auth, enroll, codeAt, store } = createFixture();
+	const { account, secret } = await enroll("a@x.test");
+
+	await auth.tenants.create("globex");
+
+	const first = await auth.signIn({
+		tenant: "globex",
+		device: "laptop",
+		factor: "email",
+		response: { email: "a@x.test" },
+	});
+
+	if (first.ok || typeof first.error === "string") {
+		throw new Error("the account needs its second factor in every tenant");
+	}
+
+	const done = await auth.signIn({
+		tenant: "globex",
+		device: "laptop",
+		factor: "totp",
+		response: { code: await codeAt(secret) },
+		continuation: first.error.continuation,
+	});
+
+	expect(done.ok && done.value.account).toBe(account);
+	expect(done.ok && done.value.tenant).toBe("globex");
+	expect(await store.find(account)).toBeDefined();
+	expect((await auth.accounts.delete(account)).ok).toBe(true);
+	expect(await store.find(account)).toBeUndefined();
 });

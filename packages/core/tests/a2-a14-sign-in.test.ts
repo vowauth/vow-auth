@@ -1,12 +1,10 @@
 import {
 	createMemoryEpochStore,
-	createMemoryIdentityStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
 import * as core from "@vow-auth/core";
 import {
 	type AuditRecord,
-	createMutateIdentity,
 	createSealer,
 	createSessionTokens,
 	createSignIn,
@@ -19,6 +17,7 @@ import {
 } from "@vow-auth/core/internal";
 import { durationOf } from "@vow-auth/test-support";
 import { expect, test, vi } from "vitest";
+import { createAccounts } from "./support/accounts.js";
 
 const LIFE_TIME = 60_000;
 
@@ -39,11 +38,11 @@ const emailClaims = (email: string, emailVerified = true) => ({
 	emailVerified,
 });
 
-const createFixture = (options: {
+const createFixture = async (options: {
 	policy?: (input: SignInPolicyInput) => unknown;
 	audit?: (record: AuditRecord) => Promise<void>;
 }) => {
-	const identities = createMemoryIdentityStore();
+	const accounts = await createAccounts();
 	const audit = options.audit;
 	const sessionTokens = createSessionTokens({
 		sealer: createSealer({
@@ -54,20 +53,17 @@ const createFixture = (options: {
 		audit,
 	});
 	const issueSpy = vi.spyOn(sessionTokens, "issue");
-	const mutateIdentity = createMutateIdentity({
-		store: identities,
-		sessionTokens,
-		audit,
-	});
 	const factors = new Map<string, Factor>();
 	const signInById = createSignIn({
 		factors,
-		identities,
+		accounts: accounts.store,
+		records: accounts.records,
+		trustedProviders: ["email"],
 		sessionTokens,
-		mutateIdentity,
 		tokens: createTokens({
 			store: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 		}),
+		registration: () => "allow",
 		policy: options.policy ?? (() => "allow"),
 		sessionTimeToLiveMilliseconds: LIFE_TIME,
 		audit,
@@ -93,9 +89,12 @@ test("A14: the public API has no way to create a session or to build a part with
 		"createTokens",
 		"createSealer",
 		"createSessionTokens",
-		"createMutateIdentity",
+		"createRecordSeal",
+		"createRecords",
+		"createManagement",
 		"verifyProof",
-		"resolveIdentity",
+		"planSignIn",
+		"applyPlan",
 		"evaluatePolicy",
 	]) {
 		expect(Object.keys(core), building).not.toContain(building);
@@ -105,7 +104,7 @@ test("A14: the public API has no way to create a session or to build a part with
 });
 
 test("A14: a session that was not born in the flow gets no token", async () => {
-	const { sessionTokens } = createFixture({});
+	const { sessionTokens } = await createFixture({});
 	const forged = await sessionTokens.issue(
 		{ id: "s-1", subject: "admin" },
 		{
@@ -121,7 +120,7 @@ test("A14: a session that was not born in the flow gets no token", async () => {
 
 test("A2: a factor nobody wrote a line for is under the same ban, whatever it is", async () => {
 	const banned = new Set<string>();
-	const { signIn } = createFixture({
+	const { signIn } = await createFixture({
 		policy: ({ subject }) => (banned.has(subject) ? "deny" : "allow"),
 	});
 	const claims = emailClaims("alice@example.com");
@@ -153,7 +152,7 @@ test("A2: a factor nobody wrote a line for is under the same ban, whatever it is
 
 test("A2: the policy sees how the person proved themselves and can demand more", async () => {
 	const seen: SignInPolicyInput[] = [];
-	const { signIn } = createFixture({
+	const { signIn } = await createFixture({
 		policy: (input) => {
 			seen.push(input);
 
@@ -191,7 +190,7 @@ test("A2: the policy sees how the person proved themselves and can demand more",
 
 test("A2: every step of every factor is audited", async () => {
 	const records: AuditRecord[] = [];
-	const { signIn } = createFixture({
+	const { signIn } = await createFixture({
 		audit: async (record) => {
 			records.push(record);
 		},
@@ -210,16 +209,21 @@ test("A2: every step of every factor is audited", async () => {
 
 	expect(records.map((record) => `${record.event}:${record.reason}`)).toEqual([
 		"proof.verify:verified",
-		"identity.resolve:created",
-		"identity.mutate:email-confirmed",
 		"policy.evaluate:allow",
+		"policy.evaluate:allow",
+		"identity.resolve:created",
 		"session.issue:issued",
 	]);
+	expect(
+		records
+			.filter((record) => record.event === "policy.evaluate")
+			.map((record) => record.detail.policy),
+	).toEqual(["registration", "sign-in"]);
 	expect(records[0]?.detail.factor).toBe("novel-factor");
 });
 
 test("a verified email evicts earlier claims by itself, nobody has to remember to ask", async () => {
-	const { sessionTokens, signIn } = createFixture({});
+	const { sessionTokens, signIn } = await createFixture({});
 	const squatter = await signIn({
 		tenant: "acme",
 		device: "phone",
@@ -242,13 +246,13 @@ test("a verified email evicts earlier claims by itself, nobody has to remember t
 		throw new Error("both sign ins must pass");
 	}
 
-	expect(victim.value.evicted).toEqual([squatter.value.subject]);
+	expect(victim.value.evicted).toEqual([squatter.value.account]);
 	expect((await sessionTokens.verify(squatter.value.token)).ok).toBe(false);
 	expect((await sessionTokens.verify(victim.value.token)).ok).toBe(true);
 });
 
 test("a refusal reports the step that refused and issues nothing", async () => {
-	const { issueSpy, signIn } = createFixture({ policy: () => "deny" });
+	const { issueSpy, signIn } = await createFixture({ policy: () => "deny" });
 	const run = (tenant: string, factor: Factor) =>
 		signIn({ tenant, device: "laptop", factor, response: undefined });
 
@@ -270,7 +274,7 @@ test("a refusal reports the step that refused and issues nothing", async () => {
 });
 
 test("a failing audit means no session", async () => {
-	const { issueSpy, signIn } = createFixture({
+	const { issueSpy, signIn } = await createFixture({
 		audit: async () => {
 			throw new Error("the audit store is down");
 		},
@@ -287,36 +291,18 @@ test("a failing audit means no session", async () => {
 	expect(issueSpy).not.toHaveBeenCalled();
 });
 
-test("when the email cannot be confirmed the policy is not even asked", async () => {
-	const identities = createMemoryIdentityStore();
-	const sessionTokens = createSessionTokens({
-		sealer: createSealer({
-			secrets: [{ version: 1, value: "flow-secret-0123456789abcdefghijklmn" }],
-		}),
-		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
-		maximumLifeTimeMilliseconds: LIFE_TIME,
-	});
+test("a tenant the application did not create is refused before any policy is asked", async () => {
 	const policy = vi.fn(() => "allow");
-	const factor = factorOf("f", "possession", emailClaims("a@example.com"));
-	const signIn = createSignIn({
-		factors: new Map([[factor.id, factor]]),
-		identities,
-		sessionTokens,
-		mutateIdentity: async () => ({ ok: false, error: "forbidden" }),
-		tokens: createTokens({
-			store: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
-		}),
-		policy,
-		sessionTimeToLiveMilliseconds: LIFE_TIME,
-	});
+	const { issueSpy, signIn } = await createFixture({ policy });
 
 	const result = await signIn({
-		tenant: "acme",
+		tenant: "nowhere",
 		device: "laptop",
-		factor: factor.id,
+		factor: factorOf("f", "possession", emailClaims("a@example.com")),
 		response: undefined,
 	});
 
-	expect(!result.ok && result.error).toBe("forbidden");
+	expect(!result.ok && result.error).toBe("no-tenant");
 	expect(policy).not.toHaveBeenCalled();
+	expect(issueSpy).not.toHaveBeenCalled();
 });

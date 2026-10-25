@@ -62,7 +62,7 @@ rules:
   - id: secret-compared-in-variable-time
     languages: [typescript, javascript]
     severity: ERROR
-    message: Comparing a secret with === takes time that depends on where it differs; compare in constant time.
+    message: Comparing a secret with === takes time that depends on where it differs; compare in constant time. A seal read back for compare-and-set, named expectedSeal, is a version, not a secret.
     patterns:
       - pattern-either:
           - pattern: $A === $B
@@ -74,6 +74,8 @@ rules:
       - pattern-not: $A !== undefined
       - pattern-not: $A === null
       - pattern-not: $A !== null
+      - pattern-not: $A === expectedSeal
+      - pattern-not: $A !== expectedSeal
 
   - id: statement-built-from-values
     languages: [typescript]

@@ -86,11 +86,13 @@ export function createBearerHandler(
 		signedIn: (signedIn) =>
 			answer(200, {
 				token: signedIn.token,
+				account: signedIn.account,
 				subject: signedIn.subject,
 				tenant: signedIn.tenant,
 				device: signedIn.device,
 				session: signedIn.session,
 				identity: signedIn.identity,
+				membership: signedIn.membership,
 				email: signedIn.email,
 			}),
 		sessionEnded: () => [],

@@ -68,15 +68,15 @@ export type Factor = {
 
 /**
  * What the sign in knows when it asks a factor to verify. In the first step
- * there is no subject and no proof yet. In the second step of a step-up the
- * subject is the one the first factor identified and the proofs are the ones
+ * there is no account and no proof yet. In the second step of a step-up the
+ * account is the one the first factor identified and the proofs are the ones
  * it has passed, so a second factor can look up what it holds for that
- * subject and return the claims of an earlier proof, instead of trusting the
- * client to say who it is.
+ * account, the same in every tenant, and return the claims of an earlier
+ * proof, instead of trusting the client to say who it is.
  */
 export type FactorContext = {
 	readonly tenant: string;
-	readonly subject?: string;
+	readonly account?: string;
 	readonly proofs: readonly Proof[];
 };
 
@@ -97,6 +97,16 @@ const CLAIM_KEYS: readonly string[] = [
 const NO_CONTEXT: FactorContext = Object.freeze({ tenant: "", proofs: [] });
 
 const mintedProofs = createMintRegistry<Proof>();
+
+/** Whether two claims say exactly the same about the same identity. */
+export const sameClaims = (
+	left: IdentityClaims,
+	right: IdentityClaims,
+): boolean =>
+	left.provider === right.provider &&
+	left.externalId === right.externalId &&
+	left.emailVerified === right.emailVerified &&
+	left.email?.address === right.email?.address;
 
 const parseClaims = (raw: unknown): Result<IdentityClaims, string> => {
 	if (!isPlainObject(raw)) {
@@ -203,12 +213,8 @@ export async function verifyProof(
 	const claims = parsed.value;
 
 	const context = own(options, "context") ?? NO_CONTEXT;
-	const repeatsEarlierProof = context.proofs.some(
-		(earlier) =>
-			earlier.claims.provider === claims.provider &&
-			earlier.claims.externalId === claims.externalId &&
-			earlier.claims.emailVerified === claims.emailVerified &&
-			earlier.claims.email?.address === claims.email?.address,
+	const repeatsEarlierProof = context.proofs.some((earlier) =>
+		sameClaims(earlier.claims, claims),
 	);
 
 	if (

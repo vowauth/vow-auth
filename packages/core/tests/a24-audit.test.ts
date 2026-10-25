@@ -1,26 +1,27 @@
 import {
 	createMemoryEpochStore,
-	createMemoryIdentityStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
 import {
+	type AccountStore,
 	AUDIT_EVENTS,
 	type AuditRecord,
 	type AuditSink,
+	applyPlan,
 	createSealer,
 	createSessionTokens,
 	createTokens,
 	evaluatePolicy,
 	type Factor,
-	type IdentityStore,
 	issueSession,
+	planSignIn,
 	type Result,
-	resolveIdentity,
 	succeed,
 	verifyProof,
 } from "@vow-auth/core/internal";
 import { durationOf } from "@vow-auth/test-support";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { createAccounts } from "./support/accounts.js";
 
 beforeEach(() => {
 	vi.useFakeTimers({ toFake: ["Date"] });
@@ -165,9 +166,34 @@ test("proofs are recorded with the reason a refusal has, without the email", asy
 	expect(JSON.stringify(records)).not.toContain("alice@example.com");
 });
 
+const signInOf = async (
+	accounts: { readonly store: AccountStore },
+	records: Parameters<typeof planSignIn>[0]["records"],
+	tenant: string,
+	proof: unknown,
+	audit: AuditSink,
+) => {
+	const options = {
+		store: accounts.store,
+		records,
+		trustedProviders: ["email", "github"],
+		audit,
+	};
+	const plan = await planSignIn(options, tenant, proof);
+
+	if (!plan.ok) {
+		return;
+	}
+
+	await applyPlan(
+		{ ...options, sessionTokens: createSessions().sessionTokens },
+		plan.value,
+	);
+};
+
 test("identity resolution is recorded for every outcome and refusal", async () => {
 	const { records, sink } = createCollector();
-	const store = createMemoryIdentityStore();
+	const accounts = await createAccounts();
 	const first = await proofOf({ ...validClaims, provider: "email" });
 	const other = await proofOf({
 		...validClaims,
@@ -175,21 +201,28 @@ test("identity resolution is recorded for every outcome and refusal", async () =
 		externalId: "gh-1",
 	});
 
-	await resolveIdentity(store, "acme", first, { audit: sink });
-	await resolveIdentity(store, "acme", first, { audit: sink });
-	await resolveIdentity(store, "acme", other, { audit: sink });
-	await resolveIdentity(store, "acme", { forged: true }, { audit: sink });
+	for (const [tenant, proof] of [
+		["acme", first],
+		["acme", first],
+		["acme", other],
+		["nowhere", first],
+	] as const) {
+		await signInOf(accounts, accounts.records, tenant, proof, sink);
+	}
 
 	expect(summary(records)).toEqual([
 		"identity.resolve:success:created",
 		"identity.resolve:success:existing",
 		"identity.resolve:success:linked",
-		"identity.resolve:refusal:no-proof",
+		"identity.resolve:refusal:not-found",
 	]);
 	expect(records[0]?.subject).not.toBe("");
 	expect(records[0]?.subject).toBe(records[1]?.subject);
 	expect(records[2]?.subject).toBe(records[0]?.subject);
-	expect(records.every((record) => record.tenant === "acme")).toBe(true);
+	expect(records[3]?.tenant).toBe("nowhere");
+	expect(records.slice(0, 3).every((record) => record.tenant === "acme")).toBe(
+		true,
+	);
 });
 
 test("a token refusal is generic to the caller and exact in the audit", async () => {
@@ -435,20 +468,26 @@ test("a failing sink means no allow decision and no proof", async () => {
 });
 
 test("a failing sink prevents a link, a token and a session token", async () => {
-	const identities = createMemoryIdentityStore();
-	const linkSpy = vi.fn(identities.linkIdentity);
-	const store: IdentityStore = { ...identities, linkIdentity: linkSpy };
+	const accounts = await createAccounts();
+	const linkSpy = vi.fn(accounts.store.linkIdentity);
+	const store: AccountStore = { ...accounts.store, linkIdentity: linkSpy };
 
-	await resolveIdentity(
-		store,
+	await signInOf(
+		{ store },
+		accounts.records,
 		"acme",
 		await proofOf({ ...validClaims, provider: "email" }),
+		async () => undefined,
 	);
 
 	await expect(
-		resolveIdentity(store, "acme", await proofOf(validClaims), {
-			audit: failingSink,
-		}),
+		signInOf(
+			{ store },
+			accounts.records,
+			"acme",
+			await proofOf({ ...validClaims, provider: "github" }),
+			failingSink,
+		),
 	).rejects.toThrow("the audit store is down");
 	expect(linkSpy).not.toHaveBeenCalled();
 
@@ -526,9 +565,11 @@ test("a refusal still reaches the caller as a failure when the sink is down", as
 
 test("the core reports exactly the documented events", () => {
 	expect(Object.values(AUDIT_EVENTS).sort()).toEqual([
+		"account.delete",
+		"account.evict",
 		"delegation.grant",
-		"identity.mutate",
 		"identity.resolve",
+		"membership.change",
 		"meter.consume",
 		"policy.evaluate",
 		"proof.verify",
@@ -537,6 +578,7 @@ test("the core reports exactly the documented events", () => {
 		"session.revoke",
 		"session.verify",
 		"signin.continue",
+		"tenant.change",
 		"token.consume",
 		"token.issue",
 	]);

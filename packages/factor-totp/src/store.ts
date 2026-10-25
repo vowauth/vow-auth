@@ -1,4 +1,4 @@
-/** What the store keeps for one subject. The secret is sealed: the store never holds it in the clear. */
+/** What the store keeps for one account. The secret is sealed: the store never holds it in the clear. */
 export type TotpRecord = {
 	readonly sealedSecret: string;
 	/** `false` until the person has typed a first code from their app. */
@@ -16,17 +16,13 @@ export type TotpRecord = {
  * atomic, and without these two guarantees a code can be used twice.
  */
 export type TotpStore = {
-	find(tenant: string, subject: string): Promise<TotpRecord | undefined>;
-	/** Replaces the record of the subject, or creates it. */
-	save(tenant: string, subject: string, record: TotpRecord): Promise<void>;
+	find(account: string): Promise<TotpRecord | undefined>;
+	/** Replaces the record of the account, or creates it. */
+	save(account: string, record: TotpRecord): Promise<void>;
 	/** Raises `lastStep` to `step` and says `true`, only when `step` is above it; `false` when there is no record or the step is not new. */
-	advance(tenant: string, subject: string, step: number): Promise<boolean>;
+	advance(account: string, step: number): Promise<boolean>;
 	/** Removes the hash and says `true`; `false` when the record does not hold it. */
-	spendBackupCode(
-		tenant: string,
-		subject: string,
-		hash: string,
-	): Promise<boolean>;
+	spendBackupCode(account: string, hash: string): Promise<boolean>;
 	/** Deletes the record; `false` when there was none. */
-	remove(tenant: string, subject: string): Promise<boolean>;
+	remove(account: string): Promise<boolean>;
 };

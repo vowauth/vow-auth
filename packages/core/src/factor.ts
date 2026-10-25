@@ -25,6 +25,8 @@ export type FactorInstance<Api> = {
 	verify(response: unknown, context: FactorContext): Promise<Result<unknown>>;
 	/** What the application may call, such as sending a link; nothing that issues. */
 	readonly api: Api;
+	/** Forgets what the factor keeps for an account; the engine calls it when the account is deleted. */
+	forget?(account: string): Promise<void>;
 };
 
 /**

@@ -1,11 +1,11 @@
 export {
+	type AccountStoreContractOptions,
+	accountStoreContract,
+} from "./account-store-contract.js";
+export {
 	type EpochStoreContractOptions,
 	epochStoreContract,
 } from "./epoch-store-contract.js";
-export {
-	type IdentityStoreContractOptions,
-	identityStoreContract,
-} from "./identity-store-contract.js";
 export {
 	type MeterStoreContractOptions,
 	meterStoreContract,

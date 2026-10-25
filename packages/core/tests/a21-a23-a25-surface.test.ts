@@ -1,6 +1,6 @@
 import {
+	createMemoryAccountStore,
 	createMemoryEpochStore,
-	createMemoryIdentityStore,
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
@@ -24,7 +24,7 @@ const deepFreeze = <Value>(value: Value): Value => {
 };
 
 const optionsOf = (): AuthOptions => ({
-	identities: createMemoryIdentityStore(),
+	accounts: createMemoryAccountStore(),
 	epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
 	tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 	meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
@@ -43,6 +43,7 @@ const optionsOf = (): AuthOptions => ({
 	},
 	maximumLifeTimeMilliseconds: LIFE_TIME,
 	sessionTimeToLiveMilliseconds: LIFE_TIME,
+	registration: () => "allow",
 	policy: () => "allow",
 	audit: async () => undefined,
 });
@@ -56,7 +57,7 @@ test("A21, A25: the public surface is exactly this, so a new export or a weakeni
 		"DENY_REASONS",
 		"EMAIL_PROVIDER",
 		"ERROR_CODES",
-		"IDENTITY_CHANGE_TYPES",
+		"MEMBERSHIP_OUTCOMES",
 		"NO_LIMIT",
 		"RESOLUTION_OUTCOMES",
 		"applyLimit",
@@ -77,20 +78,22 @@ test("A21, A25: the public surface is exactly this, so a new export or a weakeni
 	]);
 
 	const optionKeys = {
-		identities: true,
+		accounts: true,
 		epochs: true,
 		tokenStore: true,
 		meterStore: true,
 		secrets: true,
 		factors: true,
+		trustedProviders: true,
 		maximumLifeTimeMilliseconds: true,
 		sessionTimeToLiveMilliseconds: true,
 		stepUpTimeToLiveMilliseconds: true,
+		registration: true,
 		policy: true,
 		audit: true,
 	} satisfies Record<keyof AuthOptions, true>;
 
-	expect(Object.keys(optionKeys)).toHaveLength(11);
+	expect(Object.keys(optionKeys)).toHaveLength(13);
 });
 
 test("A25: an unknown option is a compile error, not silence", () => {
@@ -106,6 +109,8 @@ test("A25: an unknown option is a compile error, not silence", () => {
 test("A23: the core never changes what it is given", async () => {
 	const auth = createAuth(deepFreeze(optionsOf()));
 
+	expect((await auth.tenants.create("acme")).ok).toBe(true);
+
 	const signedIn = await auth.signIn(
 		deepFreeze({
 			tenant: "acme",
@@ -119,13 +124,8 @@ test("A23: the core never changes what it is given", async () => {
 
 	if (signedIn.ok) {
 		expect(
-			(
-				await auth.mutateIdentity(
-					"acme",
-					signedIn.value.subject,
-					deepFreeze({ type: "delete" }),
-				)
-			).ok,
+			(await auth.memberships.suspend("acme", signedIn.value.subject)).ok,
 		).toBe(true);
+		expect((await auth.accounts.delete(signedIn.value.account)).ok).toBe(true);
 	}
 });

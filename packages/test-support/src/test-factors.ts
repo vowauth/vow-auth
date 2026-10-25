@@ -14,9 +14,14 @@ export const factorPluginOf = (
 	options: {
 		readonly strength?: ProofStrength;
 		readonly providers?: readonly string[];
+		readonly forget?: (account: string) => Promise<void>;
 	} = {},
 ): FactorPlugin<Record<string, never>> => ({
 	strength: options.strength ?? "possession",
 	providers: options.providers ?? ["email"],
-	create: () => ({ verify, api: {} }),
+	create: () => ({
+		verify,
+		api: {},
+		...(options.forget === undefined ? {} : { forget: options.forget }),
+	}),
 });

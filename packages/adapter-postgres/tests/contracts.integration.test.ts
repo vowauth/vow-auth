@@ -1,11 +1,11 @@
 import {
-	createPostgresIdentityStore,
+	createPostgresAccountStore,
 	createPostgresSchema,
 	createPostgresTokenStore,
 	type PostgresRunner,
 } from "@vow-auth/adapter-postgres";
 import {
-	identityStoreContract,
+	accountStoreContract,
 	type StoreClock,
 	tokenStoreContract,
 } from "@vow-auth/store-contracts";
@@ -30,7 +30,8 @@ describe.runIf(databaseUrl !== undefined)("postgres", () => {
 	};
 
 	beforeAll(async () => {
-		await admin.query(`create schema if not exists ${SCHEMA}`);
+		await admin.query(`drop schema if exists ${SCHEMA} cascade`);
+		await admin.query(`create schema ${SCHEMA}`);
 		await createPostgresSchema(run);
 	});
 
@@ -51,8 +52,8 @@ describe.runIf(databaseUrl !== undefined)("postgres", () => {
 			new Promise((resolve) => setTimeout(resolve, milliseconds)),
 	};
 
-	identityStoreContract("postgres", {
-		create: () => createPostgresIdentityStore(run),
+	accountStoreContract("postgres", {
+		create: () => createPostgresAccountStore(run),
 	});
 
 	tokenStoreContract("postgres", {

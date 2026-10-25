@@ -54,6 +54,8 @@ export type EvaluatePolicyOptions = {
 	 * verdict is a deny, so a flow that cannot continue never half-grants.
 	 */
 	readonly stepUpAllowed?: boolean;
+	/** Only for the audit record: which policy decided, when a flow asks more than one. */
+	readonly name?: string;
 };
 
 type AllowDecision = Extract<Decision, { kind: typeof DECISION_KINDS.allow }>;
@@ -152,10 +154,14 @@ export async function evaluatePolicy(
 					: DECISION_KINDS.allow,
 		tenant: own(options, "tenant") ?? "",
 		subject,
-		detail:
-			judgement.kind === DECISION_KINDS.stepUp
+		detail: {
+			...(own(options, "name") === undefined
+				? {}
+				: { policy: own(options, "name") ?? "" }),
+			...(judgement.kind === DECISION_KINDS.stepUp
 				? { factor: judgement.factor }
-				: {},
+				: {}),
+		},
 	});
 
 	if (judgement.kind === DECISION_KINDS.deny) {

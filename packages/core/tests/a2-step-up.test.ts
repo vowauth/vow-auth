@@ -1,6 +1,6 @@
 import {
+	createMemoryAccountStore,
 	createMemoryEpochStore,
-	createMemoryIdentityStore,
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
@@ -13,12 +13,14 @@ import {
 	type SignInPolicyInput,
 	succeed,
 } from "@vow-auth/core";
+import { createRecordSeal, createRecords } from "@vow-auth/core/internal";
 import { factorPluginOf } from "@vow-auth/test-support";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 const MINUTE = 60_000;
 const STEP_UP_LIFE = 5 * MINUTE;
 const GOOD_CODE = "424242";
+const SECRETS = [{ version: 1, value: "step-up-secret-0123456789abcdefghijk" }];
 
 beforeEach(() => {
 	vi.useFakeTimers({ toFake: ["Date"] });
@@ -77,8 +79,9 @@ type Options = {
 	readonly policy?: (input: SignInPolicyInput) => unknown;
 };
 
-const createFixture = (options: Options = {}) => {
-	const identities = createMemoryIdentityStore();
+const createFixture = async (options: Options = {}) => {
+	const accounts = createMemoryAccountStore();
+	const sealed = createRecords(createRecordSeal({ secrets: SECRETS }));
 	const records: AuditRecord[] = [];
 	const seen: SignInPolicyInput[] = [];
 	const contexts: unknown[] = [];
@@ -95,17 +98,18 @@ const createFixture = (options: Options = {}) => {
 			email: factorPluginOf(watched(emailFactor), { providers: ["email"] }),
 			totp: factorPluginOf(watched(totpFactor), { providers: ["totp"] }),
 		},
-		identities,
+		accounts,
 		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
 		tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 		meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
-		secrets: [{ version: 1, value: "step-up-secret-0123456789abcdefghijk" }],
+		secrets: SECRETS,
 		maximumLifeTimeMilliseconds: 60 * MINUTE,
 		sessionTimeToLiveMilliseconds: 30 * MINUTE,
 		stepUpTimeToLiveMilliseconds:
 			"stepUpTimeToLiveMilliseconds" in options
 				? options.stepUpTimeToLiveMilliseconds
 				: STEP_UP_LIFE,
+		registration: () => "allow",
 		policy:
 			options.policy ??
 			((input) => {
@@ -136,17 +140,24 @@ const createFixture = (options: Options = {}) => {
 			throw new Error("the first sign in must pass");
 		}
 
-		await identities.linkIdentity(tenant, first.value.subject, {
-			provider: "totp",
-			externalId: user,
-			emailVerified: false,
-		});
+		await accounts.linkIdentity(
+			await sealed.identity({
+				provider: "totp",
+				externalId: user,
+				accountId: first.value.account,
+				email: undefined,
+				emailVerified: false,
+			}),
+		);
 		protectedSubjects.add(first.value.subject);
 
-		return first.value.subject;
+		return first.value;
 	};
 
-	return { auth, contexts, identities, records, seen, enroll };
+	await auth.tenants.create("acme");
+	await auth.tenants.create("globex");
+
+	return { auth, accounts, contexts, records, seen, enroll };
 };
 
 const stepUpOf = (result: {
@@ -171,7 +182,7 @@ const stepUpOf = (result: {
 };
 
 const firstStep = (
-	auth: ReturnType<typeof createFixture>["auth"],
+	auth: Awaited<ReturnType<typeof createFixture>>["auth"],
 	address = "alice@example.com",
 ) =>
 	auth.signIn({
@@ -182,7 +193,7 @@ const firstStep = (
 	});
 
 test("A2: a policy that asks for another factor gets a challenge and no session", async () => {
-	const { auth, enroll } = createFixture();
+	const { auth, enroll } = await createFixture();
 
 	await enroll("alice-totp", "alice@example.com");
 
@@ -195,8 +206,8 @@ test("A2: a policy that asks for another factor gets a challenge and no session"
 });
 
 test("A2: the second factor completes the sign in, and the policy sees every proof", async () => {
-	const { auth, seen, enroll } = createFixture();
-	const subject = await enroll("alice-totp", "alice@example.com");
+	const { auth, seen, enroll } = await createFixture();
+	const { subject } = await enroll("alice-totp", "alice@example.com");
 
 	seen.length = 0;
 
@@ -219,7 +230,7 @@ test("A2: the second factor completes the sign in, and the policy sees every pro
 });
 
 test("A2: the session records the factors that were passed and when, and the age grows", async () => {
-	const { auth, enroll } = createFixture();
+	const { auth, enroll } = await createFixture();
 
 	await enroll("alice-totp", "alice@example.com");
 
@@ -256,7 +267,7 @@ test("A2: the session records the factors that were passed and when, and the age
 });
 
 test("A2: a session that needed only one factor records only that one", async () => {
-	const { auth } = createFixture();
+	const { auth } = await createFixture();
 	const done = await firstStep(auth, "bob@example.com");
 
 	if (!done.ok) {
@@ -269,7 +280,7 @@ test("A2: a session that needed only one factor records only that one", async ()
 });
 
 test("A2: a continuation is spent by the first try, so a wrong code burns it", async () => {
-	const { auth, enroll } = createFixture();
+	const { auth, enroll } = await createFixture();
 
 	await enroll("alice-totp", "alice@example.com");
 
@@ -294,7 +305,7 @@ test("A2: a continuation is spent by the first try, so a wrong code burns it", a
 });
 
 test("A2: a continuation cannot be used twice, also not at the same moment", async () => {
-	const { auth, enroll } = createFixture();
+	const { auth, enroll } = await createFixture();
 
 	await enroll("alice-totp", "alice@example.com");
 
@@ -315,7 +326,7 @@ test("A2: a continuation cannot be used twice, also not at the same moment", asy
 });
 
 test("A2: a continuation expires", async () => {
-	const { auth, enroll } = createFixture();
+	const { auth, enroll } = await createFixture();
 
 	await enroll("alice-totp", "alice@example.com");
 
@@ -335,7 +346,7 @@ test("A2: a continuation expires", async () => {
 });
 
 test("A2: a continuation belongs to its tenant, device and factor, and is burned by a mismatch", async () => {
-	const { auth, enroll } = createFixture();
+	const { auth, enroll } = await createFixture();
 
 	await enroll("alice-totp", "alice@example.com");
 
@@ -370,7 +381,7 @@ test("A2: a continuation belongs to its tenant, device and factor, and is burned
 });
 
 test("A2: the second factor must belong to the same subject, and an unknown one creates nothing", async () => {
-	const { auth, identities, records, enroll } = createFixture();
+	const { auth, accounts, records, enroll } = await createFixture();
 
 	await enroll("alice-totp", "alice@example.com");
 	await enroll("bob-totp", "bob@example.com");
@@ -401,13 +412,11 @@ test("A2: the second factor must belong to the same subject, and an unknown one 
 	});
 
 	expect(stranger).toEqual({ ok: false, error: "invalid-proof" });
-	expect(await identities.findSubject("acme", "totp", "mallory-totp")).toBe(
-		undefined,
-	);
+	expect(await accounts.findIdentity("totp", "mallory-totp")).toBe(undefined);
 });
 
 test("A2: a policy that asks again for a factor already passed ends the sign in", async () => {
-	const { auth, enroll } = createFixture({
+	const { auth, enroll } = await createFixture({
 		policy: () => requireFactor("email"),
 	});
 
@@ -417,14 +426,18 @@ test("A2: a policy that asks again for a factor already passed ends the sign in"
 });
 
 test("A2: without a step-up time the policy cannot ask, and the audit says why", async () => {
-	const { auth, records } = createFixture({
+	const { auth, records } = await createFixture({
 		stepUpTimeToLiveMilliseconds: undefined,
 		policy: () => requireFactor("totp"),
 	});
 
 	expect(await firstStep(auth)).toEqual({ ok: false, error: "no-allow" });
 	expect(
-		records.find((record) => record.event === "policy.evaluate"),
+		records.find(
+			(record) =>
+				record.event === "policy.evaluate" &&
+				record.detail.policy === "sign-in",
+		),
 	).toMatchObject({
 		outcome: "refusal",
 		reason: "step-up-unavailable",
@@ -432,7 +445,7 @@ test("A2: without a step-up time the policy cannot ask, and the audit says why",
 });
 
 test("A2: only requireFactor can ask; a look-alike is an ordinary deny", async () => {
-	const { auth } = createFixture({
+	const { auth } = await createFixture({
 		policy: () => ({ kind: "step-up", factor: "totp" }),
 	});
 
@@ -440,13 +453,13 @@ test("A2: only requireFactor can ask; a look-alike is an ordinary deny", async (
 });
 
 test("A2: asking for no factor is a deny, never a half-open door", async () => {
-	const { auth } = createFixture({ policy: () => requireFactor("") });
+	const { auth } = await createFixture({ policy: () => requireFactor("") });
 
 	expect(await firstStep(auth)).toEqual({ ok: false, error: "no-allow" });
 });
 
 test("A2: the step-up is audited as a refusal with the factor asked for", async () => {
-	const { auth, records, enroll } = createFixture();
+	const { auth, records, enroll } = await createFixture();
 
 	await enroll("alice-totp", "alice@example.com");
 	records.length = 0;
@@ -458,14 +471,14 @@ test("A2: the step-up is audited as a refusal with the factor asked for", async 
 		expect.objectContaining({
 			outcome: "refusal",
 			reason: "step-up",
-			detail: { factor: "totp" },
+			detail: { policy: "sign-in", factor: "totp" },
 		}),
 	]);
 	expect(records.map((record) => record.event)).not.toContain("session.issue");
 });
 
 test("A2: a request that carries an empty or non-text continuation is refused at once", async () => {
-	const { auth } = createFixture();
+	const { auth } = await createFixture();
 
 	for (const continuation of ["", 5, null, {}]) {
 		expect(
@@ -481,16 +494,16 @@ test("A2: a request that carries an empty or non-text continuation is refused at
 	}
 });
 
-test("A2: a step-up time that is not a positive number stops the start", () => {
+test("A2: a step-up time that is not a positive number stops the start", async () => {
 	for (const stepUpTimeToLiveMilliseconds of [0, -1, Number.NaN]) {
-		expect(() => createFixture({ stepUpTimeToLiveMilliseconds })).toThrow(
-			RangeError,
-		);
+		await expect(
+			createFixture({ stepUpTimeToLiveMilliseconds }),
+		).rejects.toThrow(RangeError);
 	}
 });
 
 test("A2: the second step must use the factor that was asked for, not the first one again", async () => {
-	const { auth } = createFixture({
+	const { auth } = await createFixture({
 		policy: (input) =>
 			input.proofs.length >= 2 ? "allow" : requireFactor("totp"),
 	});
@@ -507,9 +520,9 @@ test("A2: the second step must use the factor that was asked for, not the first 
 	).toEqual({ ok: false, error: "invalid-proof" });
 });
 
-test("the first step gives a factor the tenant and nothing else, the second the subject and the proofs so far", async () => {
-	const { auth, contexts, enroll } = createFixture();
-	const subject = await enroll("alice-totp", "alice@example.com");
+test("the first step gives a factor the tenant and nothing else, the second the account and the proofs so far", async () => {
+	const { auth, contexts, enroll } = await createFixture();
+	const { account } = await enroll("alice-totp", "alice@example.com");
 
 	contexts.length = 0;
 	const challenge = stepUpOf(
@@ -533,7 +546,7 @@ test("the first step gives a factor the tenant and nothing else, the second the 
 		{ tenant: "acme", proofs: [] },
 		{
 			tenant: "acme",
-			subject,
+			account,
 			proofs: [expect.objectContaining({ factor: "email" })],
 		},
 	]);

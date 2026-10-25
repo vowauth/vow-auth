@@ -1,12 +1,12 @@
 import {
+	createMemoryAccountStore,
 	createMemoryEpochStore,
-	createMemoryIdentityStore,
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
 import {
+	accountStoreContract,
 	epochStoreContract,
-	identityStoreContract,
 	meterStoreContract,
 	type StoreClock,
 	tokenStoreContract,
@@ -56,4 +56,4 @@ tokenStoreContract("memory", {
 	clock,
 });
 
-identityStoreContract("memory", { create: () => createMemoryIdentityStore() });
+accountStoreContract("memory", { create: () => createMemoryAccountStore() });

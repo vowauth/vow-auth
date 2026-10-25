@@ -52,8 +52,12 @@ export const compare = (mac: string) => {
 	const different = secret !== value;
 	// ok: secret-compared-in-variable-time
 	const missing = secret === undefined;
+	const expectedSeal = value;
+	const row = { seal: secret };
+	// ok: secret-compared-in-variable-time
+	const changed = row.seal !== expectedSeal;
 
-	return [same, different, missing];
+	return [same, different, missing, changed];
 };
 
 const SERVER_NOW = "now()";

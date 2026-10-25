@@ -24,10 +24,9 @@ const SECRET_PURPOSE = "totp-secret";
 const NO_STEP_YET = -1;
 const ALGORITHM_NAME = "SHA1";
 
-/** What a limit is asked about: which subject is trying a code, and for what. */
+/** What a limit is asked about: which account is trying a code, and for what. */
 export type TotpLimitInput = {
-	readonly tenant: string;
-	readonly subject: string;
+	readonly account: string;
 	readonly action: "verify" | "confirm";
 };
 
@@ -43,7 +42,7 @@ export type TotpOptions = {
 	 */
 	readonly secretTimeToLive: Duration;
 	/**
-	 * How often codes may be tried for one subject. Six digits are guessable,
+	 * How often codes may be tried for one account. Six digits are guessable,
 	 * so the answer is required: a rule and the scopes to count, or `"off"`
 	 * when something in front limits it already. The engine counts it in its
 	 * meter store.
@@ -64,31 +63,31 @@ export type TotpEnrollment = {
  * What the application may call on the TOTP factor. The factor itself signs
  * in the second step of a step-up: the response is `{ code }` or
  * `{ backupCode }`. It can only follow another factor: the person is the
- * subject that factor identified, never one the client names.
+ * account that factor identified, never one the client names. An enrollment
+ * belongs to the account, so one app works in every tenant of the person.
  */
 export type Totp = {
-	/** Starts an enrollment for a signed-in subject. Starting again before confirming replaces the secret; a confirmed enrollment must be removed first. */
+	/**
+	 * Starts an enrollment for the account of a signed-in person. `label` is
+	 * what the app shows next to the issuer, such as the email. Starting again
+	 * before confirming replaces the secret; a confirmed enrollment must be
+	 * removed first.
+	 */
 	begin(input: {
-		readonly tenant: string;
-		readonly subject: string;
 		readonly account: string;
+		readonly label: string;
 	}): Promise<Result<TotpEnrollment>>;
 	/** Confirms the enrollment with a first code and returns the backup codes, shown once. */
 	confirm(input: {
-		readonly tenant: string;
-		readonly subject: string;
+		readonly account: string;
 		readonly code: string;
 	}): Promise<Result<readonly string[], string | MeterRefusal>>;
 	/** Replaces the backup codes of a confirmed enrollment; the old ones stop working. */
 	renewBackupCodes(input: {
-		readonly tenant: string;
-		readonly subject: string;
+		readonly account: string;
 	}): Promise<Result<readonly string[]>>;
 	/** Removes the enrollment. Ask for a fresh proof before you call it. */
-	remove(input: {
-		readonly tenant: string;
-		readonly subject: string;
-	}): Promise<boolean>;
+	remove(input: { readonly account: string }): Promise<boolean>;
 };
 
 const readText = (response: unknown, key: string): string | undefined => {
@@ -144,17 +143,12 @@ export function createTotp(options: TotpOptions): FactorPlugin<Totp> {
 				options.limit === NO_LIMIT ? NO_LIMIT : createLimiter(options.limit);
 
 			const openSecret = async (
-				tenant: string,
-				subject: string,
+				account: string,
 				sealed: string,
 			): Promise<Uint8Array<ArrayBuffer> | undefined> => {
 				const opened = await sealer.unseal(sealed, SECRET_PURPOSE);
 
-				if (
-					!opened.ok ||
-					opened.value.tenant !== tenant ||
-					opened.value.subject !== subject
-				) {
+				if (!opened.ok || opened.value.account !== account) {
 					return undefined;
 				}
 
@@ -171,16 +165,15 @@ export function createTotp(options: TotpOptions): FactorPlugin<Totp> {
 			};
 
 			const verify = async (response: unknown, context: FactorContext) => {
-				const { tenant, subject } = context;
+				const { account } = context;
 				const claims = sameIdentity(context.proofs[0]);
 
-				if (subject === undefined || claims === undefined) {
+				if (account === undefined || claims === undefined) {
 					return fail(ERROR_CODES.invalidProof);
 				}
 
 				const allowed = await applyLimit(limit, {
-					tenant,
-					subject,
+					account,
 					action: "verify",
 				});
 
@@ -188,7 +181,7 @@ export function createTotp(options: TotpOptions): FactorPlugin<Totp> {
 					return fail(ERROR_CODES.rateLimited);
 				}
 
-				const record = await store.find(tenant, subject);
+				const record = await store.find(account);
 
 				if (record === undefined || !record.confirmed) {
 					return fail(ERROR_CODES.invalidProof);
@@ -198,8 +191,7 @@ export function createTotp(options: TotpOptions): FactorPlugin<Totp> {
 
 				if (backupCode !== undefined) {
 					return (await store.spendBackupCode(
-						tenant,
-						subject,
+						account,
 						await hashBackupCode(backupCode),
 					))
 						? succeed(claims)
@@ -207,27 +199,29 @@ export function createTotp(options: TotpOptions): FactorPlugin<Totp> {
 				}
 
 				const code = readText(response, "code");
-				const secret = await openSecret(tenant, subject, record.sealedSecret);
+				const secret = await openSecret(account, record.sealedSecret);
 				const step =
 					code === undefined || secret === undefined
 						? undefined
 						: await findStep(secret, code, now());
 
-				return step !== undefined &&
-					(await store.advance(tenant, subject, step))
+				return step !== undefined && (await store.advance(account, step))
 					? succeed(claims)
 					: fail(ERROR_CODES.invalidProof);
 			};
 
 			return {
 				verify,
+				forget: async (account) => {
+					await store.remove(account);
+				},
 				api: {
-					async begin({ tenant, subject, account }) {
-						if (account === "") {
+					async begin({ account, label }) {
+						if (account === "" || label === "") {
 							return fail(ERROR_CODES.invalidRequest);
 						}
 
-						const existing = await store.find(tenant, subject);
+						const existing = await store.find(account);
 
 						if (existing?.confirmed) {
 							return fail(ERROR_CODES.forbidden);
@@ -237,10 +231,10 @@ export function createTotp(options: TotpOptions): FactorPlugin<Totp> {
 							crypto.getRandomValues(new Uint8Array(SECRET_BYTES)),
 						);
 
-						await store.save(tenant, subject, {
+						await store.save(account, {
 							sealedSecret: await sealer.seal({
 								purpose: SECRET_PURPOSE,
-								payload: { secret, tenant, subject },
+								payload: { secret, account },
 								timeToLive: options.secretTimeToLive,
 							}),
 							confirmed: false,
@@ -248,7 +242,7 @@ export function createTotp(options: TotpOptions): FactorPlugin<Totp> {
 							backupCodeHashes: [],
 						});
 
-						const label = `${encodeURIComponent(issuer)}:${encodeURIComponent(account)}`;
+						const name = `${encodeURIComponent(issuer)}:${encodeURIComponent(label)}`;
 						const query = new URLSearchParams({
 							secret,
 							issuer,
@@ -259,13 +253,12 @@ export function createTotp(options: TotpOptions): FactorPlugin<Totp> {
 
 						return succeed({
 							secret,
-							uri: `otpauth://totp/${label}?${query.toString()}`,
+							uri: `otpauth://totp/${name}?${query.toString()}`,
 						});
 					},
-					async confirm({ tenant, subject, code }) {
+					async confirm({ account, code }) {
 						const allowed = await applyLimit(limit, {
-							tenant,
-							subject,
+							account,
 							action: "confirm",
 						});
 
@@ -273,32 +266,25 @@ export function createTotp(options: TotpOptions): FactorPlugin<Totp> {
 							return fail(allowed.error);
 						}
 
-						const record = await store.find(tenant, subject);
+						const record = await store.find(account);
 
 						if (record === undefined || record.confirmed) {
 							return fail(ERROR_CODES.invalidRequest);
 						}
 
-						const secret = await openSecret(
-							tenant,
-							subject,
-							record.sealedSecret,
-						);
+						const secret = await openSecret(account, record.sealedSecret);
 						const step =
 							secret === undefined
 								? undefined
 								: await findStep(secret, code, now());
 
-						if (
-							step === undefined ||
-							!(await store.advance(tenant, subject, step))
-						) {
+						if (step === undefined || !(await store.advance(account, step))) {
 							return fail(ERROR_CODES.invalidProof);
 						}
 
 						const { codes, hashes } = await newBackupCodes();
 
-						await store.save(tenant, subject, {
+						await store.save(account, {
 							...record,
 							confirmed: true,
 							lastStep: step,
@@ -307,8 +293,8 @@ export function createTotp(options: TotpOptions): FactorPlugin<Totp> {
 
 						return succeed(codes);
 					},
-					async renewBackupCodes({ tenant, subject }) {
-						const record = await store.find(tenant, subject);
+					async renewBackupCodes({ account }) {
+						const record = await store.find(account);
 
 						if (record === undefined || !record.confirmed) {
 							return fail(ERROR_CODES.invalidRequest);
@@ -316,15 +302,15 @@ export function createTotp(options: TotpOptions): FactorPlugin<Totp> {
 
 						const { codes, hashes } = await newBackupCodes();
 
-						await store.save(tenant, subject, {
+						await store.save(account, {
 							...record,
 							backupCodeHashes: hashes,
 						});
 
 						return succeed(codes);
 					},
-					remove({ tenant, subject }) {
-						return store.remove(tenant, subject);
+					remove({ account }) {
+						return store.remove(account);
 					},
 				},
 			};

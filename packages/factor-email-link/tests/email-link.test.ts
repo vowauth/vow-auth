@@ -1,6 +1,6 @@
 import {
+	createMemoryAccountStore,
 	createMemoryEpochStore,
-	createMemoryIdentityStore,
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
@@ -9,12 +9,8 @@ import {
 	createLimiter,
 	createMeter,
 	createSealer,
-	createSessionTokens,
 	createTokens,
-	evaluatePolicy,
 	type Factor,
-	issueSession,
-	resolveIdentity,
 	type Tokens,
 	verifyProof,
 } from "@vow-auth/core/internal";
@@ -76,16 +72,46 @@ const createFixture = () => {
 		},
 		tokens,
 	);
-	const identities = createMemoryIdentityStore();
-	const sessionTokens = createSessionTokens({
-		sealer: createSealer({
-			secrets: [{ version: 1, value: "session-secret-0123456789abcdefghijk" }],
-		}),
+	return { emailLink, sent, tokens };
+};
+
+/** The engine with the email link as its only factor, and the tenant acme. */
+const createEngine = async () => {
+	const sent: EmailLinkMessage[] = [];
+	const tokenStore = createMemoryTokenStore({ maximumBytes: 1_000_000 });
+	const auth = createAuth({
+		accounts: createMemoryAccountStore(),
 		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
+		tokenStore,
+		meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
+		secrets: [{ version: 1, value: SECRET }],
+		factors: {
+			"email-link": createEmailLink({
+				deliver: async (message) => {
+					sent.push(message);
+				},
+				timeToLive: durationOf(FIFTEEN_MINUTES),
+				limit: "off",
+			}),
+		},
 		maximumLifeTimeMilliseconds: FIFTEEN_MINUTES,
+		sessionTimeToLiveMilliseconds: FIFTEEN_MINUTES,
+		registration: () => "allow",
+		policy: () => "allow",
+		audit: async () => undefined,
 	});
 
-	return { emailLink, identities, sent, sessionTokens, tokens };
+	await auth.tenants.create("acme");
+
+	const signIn = (response: string) =>
+		auth.signIn({
+			tenant: "acme",
+			device: "laptop",
+			factor: "email-link",
+			response,
+		});
+
+	return { auth, sent, signIn, tokenStore };
 };
 
 const lastToken = (sent: readonly EmailLinkMessage[]): string => {
@@ -99,77 +125,48 @@ const lastToken = (sent: readonly EmailLinkMessage[]): string => {
 };
 
 test("a link signs a person in end to end and revocation ends the session", async () => {
-	const { emailLink, identities, sent, sessionTokens } = createFixture();
+	const { auth, sent, signIn } = await createEngine();
 
-	expect((await emailLink.challenge("Alice@Example.COM")).ok).toBe(true);
+	expect(
+		(await auth.factors["email-link"].challenge("Alice@Example.COM")).ok,
+	).toBe(true);
 	expect(sent[0]?.email).toBe("alice@example.com");
 
-	const proof = await verifyProof(emailLink.factor, lastToken(sent));
-	expect(proof.ok).toBe(true);
+	const signedIn = await signIn(lastToken(sent));
 
-	if (!proof.ok) {
-		return;
+	if (!signedIn.ok) {
+		throw new Error("the link must sign in");
 	}
 
-	const resolution = await resolveIdentity(identities, "acme", proof.value);
-	expect(resolution.ok && resolution.value.outcome).toBe("created");
+	expect(signedIn.value.identity).toBe("created");
 
-	if (!resolution.ok) {
-		return;
-	}
+	const verified = await auth.sessions.verify(signedIn.value.token);
 
-	const decision = await evaluatePolicy(
-		resolution.value.subjectId,
-		() => "allow",
-	);
-	const session = issueSession(decision);
-	expect(session.ok).toBe(true);
+	expect(verified.ok && verified.value.subject).toBe(signedIn.value.subject);
 
-	if (!session.ok) {
-		return;
-	}
-
-	const token = await sessionTokens.issue(session.value, {
-		tenant: "acme",
-		device: "laptop",
-		timeToLive: durationOf(FIFTEEN_MINUTES),
-		methods: ["test"],
-	});
-
-	if (!token.ok) {
-		throw new Error("a born session must get a token");
-	}
-
-	const verified = await sessionTokens.verify(token.value);
-	expect(verified.ok && verified.value.subject).toBe(
-		resolution.value.subjectId,
-	);
-
-	await sessionTokens.revoke({
+	await auth.sessions.revoke({
 		tenant: "acme",
 		scope: "user",
-		id: resolution.value.subjectId,
+		id: signedIn.value.subject,
 	});
 
-	expect((await sessionTokens.verify(token.value)).ok).toBe(false);
+	expect((await auth.sessions.verify(signedIn.value.token)).ok).toBe(false);
 });
 
-test("another spelling of the address signs in as the same subject", async () => {
-	const { emailLink, identities, sent } = createFixture();
-	const subjects: (string | false)[] = [];
+test("another spelling of the address signs in as the same account", async () => {
+	const { auth, sent, signIn } = await createEngine();
+	const accounts: (string | false)[] = [];
 
 	for (const spelling of ["alice@example.com", "  ALICE@Example.Com "]) {
-		await emailLink.challenge(spelling);
-		const proof = await verifyProof(emailLink.factor, lastToken(sent));
-		const resolution = proof.ok
-			? await resolveIdentity(identities, "acme", proof.value)
-			: undefined;
+		await auth.factors["email-link"].challenge(spelling);
 
-		subjects.push(resolution?.ok === true && resolution.value.subjectId);
+		const signedIn = await signIn(lastToken(sent));
+
+		accounts.push(signedIn.ok && signedIn.value.account);
 	}
 
-	expect(subjects[0]).toBeTruthy();
-	expect(subjects[0]).toBe(subjects[1]);
+	expect(accounts[0]).toBeTruthy();
+	expect(accounts[0]).toBe(accounts[1]);
 });
 
 test("a link works once", async () => {
@@ -229,18 +226,15 @@ test("a malformed address sends nothing", async () => {
 	expect(sent).toEqual([]);
 });
 
-test("the answer does not depend on whether the subject is known", async () => {
-	const { emailLink, identities, sent } = createFixture();
-	const unknown = await emailLink.challenge("nobody@example.com");
+test("the answer does not depend on whether the person is known", async () => {
+	const { auth, sent, signIn } = await createEngine();
+	const unknown =
+		await auth.factors["email-link"].challenge("nobody@example.com");
 
-	await emailLink.challenge("alice@example.com");
-	const proof = await verifyProof(emailLink.factor, lastToken(sent));
+	await auth.factors["email-link"].challenge("alice@example.com");
+	await signIn(lastToken(sent));
 
-	if (proof.ok) {
-		await resolveIdentity(identities, "acme", proof.value);
-	}
-
-	const known = await emailLink.challenge("alice@example.com");
+	const known = await auth.factors["email-link"].challenge("alice@example.com");
 
 	expect(unknown).toEqual(known);
 });
@@ -323,35 +317,7 @@ test("a forgotten limit stops the start", () => {
 });
 
 test("through the engine a link signs in, and a token from anywhere else does not", async () => {
-	const sent: EmailLinkMessage[] = [];
-	const tokenStore = createMemoryTokenStore({ maximumBytes: 1_000_000 });
-	const auth = createAuth({
-		identities: createMemoryIdentityStore(),
-		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
-		tokenStore,
-		meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
-		secrets: [{ version: 1, value: SECRET }],
-		factors: {
-			"email-link": createEmailLink({
-				deliver: async (message) => {
-					sent.push(message);
-				},
-				timeToLive: durationOf(FIFTEEN_MINUTES),
-				limit: "off",
-			}),
-		},
-		maximumLifeTimeMilliseconds: FIFTEEN_MINUTES,
-		sessionTimeToLiveMilliseconds: FIFTEEN_MINUTES,
-		policy: () => "allow",
-		audit: async () => undefined,
-	});
-	const signIn = (response: string) =>
-		auth.signIn({
-			tenant: "acme",
-			device: "laptop",
-			factor: "email-link",
-			response,
-		});
+	const { auth, sent, signIn, tokenStore } = await createEngine();
 
 	expect(
 		(await auth.factors["email-link"].challenge("alice@example.com")).ok,

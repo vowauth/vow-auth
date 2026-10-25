@@ -13,89 +13,85 @@ const record = (overrides: Partial<TotpRecord> = {}): TotpRecord => ({
 test("of many tries at one step, exactly one is accepted", async () => {
 	const store = createMemoryTotpStore({ maximumRecords: 10 });
 
-	await store.save("acme", "alice", record());
+	await store.save("acc_alice", record());
 
 	const results = await Promise.all(
-		Array.from({ length: 50 }, () => store.advance("acme", "alice", 7)),
+		Array.from({ length: 50 }, () => store.advance("acc_alice", 7)),
 	);
 
 	expect(results.filter(Boolean)).toHaveLength(1);
-	expect(await store.advance("acme", "alice", 7)).toBe(false);
-	expect(await store.advance("acme", "alice", 6)).toBe(false);
-	expect(await store.advance("acme", "alice", 8)).toBe(true);
-	expect((await store.find("acme", "alice"))?.lastStep).toBe(8);
+	expect(await store.advance("acc_alice", 7)).toBe(false);
+	expect(await store.advance("acc_alice", 6)).toBe(false);
+	expect(await store.advance("acc_alice", 8)).toBe(true);
+	expect((await store.find("acc_alice"))?.lastStep).toBe(8);
 });
 
 test("of many tries with one backup code, exactly one is accepted", async () => {
 	const store = createMemoryTotpStore({ maximumRecords: 10 });
 
-	await store.save("acme", "alice", record());
+	await store.save("acc_alice", record());
 
 	const results = await Promise.all(
-		Array.from({ length: 50 }, () =>
-			store.spendBackupCode("acme", "alice", "one"),
-		),
+		Array.from({ length: 50 }, () => store.spendBackupCode("acc_alice", "one")),
 	);
 
 	expect(results.filter(Boolean)).toHaveLength(1);
-	expect((await store.find("acme", "alice"))?.backupCodeHashes).toEqual([
-		"two",
-	]);
+	expect((await store.find("acc_alice"))?.backupCodeHashes).toEqual(["two"]);
 });
 
-test("nothing is advanced or spent for a subject that has no record", async () => {
+test("nothing is advanced or spent for an account that has no record", async () => {
 	const store = createMemoryTotpStore({ maximumRecords: 10 });
 
-	expect(await store.advance("acme", "nobody", 1)).toBe(false);
-	expect(await store.spendBackupCode("acme", "nobody", "one")).toBe(false);
-	expect(await store.remove("acme", "nobody")).toBe(false);
+	expect(await store.advance("acc_nobody", 1)).toBe(false);
+	expect(await store.spendBackupCode("acc_nobody", "one")).toBe(false);
+	expect(await store.remove("acc_nobody")).toBe(false);
 });
 
-test("a tenant and a subject are kept apart, whatever characters they hold", async () => {
+test("accounts are kept apart, whatever characters they hold", async () => {
 	const store = createMemoryTotpStore({ maximumRecords: 10 });
 
-	await store.save("a", "b,c", record({ sealedSecret: "first" }));
-	await store.save("a,b", "c", record({ sealedSecret: "second" }));
+	await store.save("a,b", record({ sealedSecret: "first" }));
+	await store.save("a", record({ sealedSecret: "second" }));
 
-	expect((await store.find("a", "b,c"))?.sealedSecret).toBe("first");
-	expect((await store.find("a,b", "c"))?.sealedSecret).toBe("second");
+	expect((await store.find("a,b"))?.sealedSecret).toBe("first");
+	expect((await store.find("a"))?.sealedSecret).toBe("second");
 });
 
 test("a record that is read cannot be changed through the copy", async () => {
 	const store = createMemoryTotpStore({ maximumRecords: 10 });
 
-	await store.save("acme", "alice", record());
+	await store.save("acc_alice", record());
 
-	const copy = await store.find("acme", "alice");
+	const copy = await store.find("acc_alice");
 
 	if (copy !== undefined) {
 		Array.prototype.push.call(copy.backupCodeHashes, "forged");
 	}
 
-	expect((await store.find("acme", "alice"))?.backupCodeHashes).toEqual([
+	expect((await store.find("acc_alice"))?.backupCodeHashes).toEqual([
 		"one",
 		"two",
 	]);
 });
 
-test("a full store refuses a new subject and never drops a live one", async () => {
+test("a full store refuses a new account and never drops a live one", async () => {
 	const store = createMemoryTotpStore({ maximumRecords: 2 });
 
-	await store.save("acme", "a", record());
-	await store.save("acme", "b", record());
+	await store.save("acc_a", record());
+	await store.save("acc_b", record());
 
-	await expect(store.save("acme", "c", record())).rejects.toSatisfy(
+	await expect(store.save("acc_c", record())).rejects.toSatisfy(
 		isStoreFullError,
 	);
-	await store.save("acme", "a", record({ lastStep: 3 }));
+	await store.save("acc_a", record({ lastStep: 3 }));
 
-	expect((await store.find("acme", "a"))?.lastStep).toBe(3);
-	expect(await store.find("acme", "b")).toBeDefined();
+	expect((await store.find("acc_a"))?.lastStep).toBe(3);
+	expect(await store.find("acc_b")).toBeDefined();
 
-	await store.remove("acme", "b");
-	await store.save("acme", "c", record());
+	await store.remove("acc_b");
+	await store.save("acc_c", record());
 
-	expect(await store.find("acme", "c")).toBeDefined();
+	expect(await store.find("acc_c")).toBeDefined();
 });
 
 test("the size of the store must be a positive integer", () => {

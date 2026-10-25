@@ -1,17 +1,23 @@
 import {
+	createMemoryAccountStore,
 	createMemoryEpochStore,
-	createMemoryIdentityStore,
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
 import {
+	type AccountStore,
 	type Auth,
 	createAuth,
 	type Factor,
 	requireFactor,
 	succeed,
 } from "@vow-auth/core";
-import { createLimiter, createMeter } from "@vow-auth/core/internal";
+import {
+	createLimiter,
+	createMeter,
+	createRecordSeal,
+	createRecords,
+} from "@vow-auth/core/internal";
 import {
 	createBearerHandler,
 	createCookieHandler,
@@ -25,6 +31,27 @@ const TENANT = "acme";
 const SESSION_COOKIE = "__Host-vow-session";
 const DEVICE_COOKIE = "__Host-vow-device";
 const SECONDS_PER_HOUR = 3_600;
+const SECRETS = [{ version: 1, value: "http-seal-0123456789abcdefghijklmnop" }];
+
+/** An account store whose tenant exists before the first call reaches it. */
+const accountsWithTenant = (): AccountStore => {
+	const store = createMemoryAccountStore();
+	const records = createRecords(createRecordSeal({ secrets: SECRETS }));
+	const ready = records
+		.tenant({ id: TENANT, disabled: false })
+		.then((tenant) => store.createTenant(tenant));
+	const waiting: Record<string, unknown> = {};
+
+	for (const [name, method] of Object.entries(store)) {
+		waiting[name] = async (...input: unknown[]) => {
+			await ready;
+
+			return Reflect.apply(method, store, input);
+		};
+	}
+
+	return waiting as AccountStore;
+};
 
 const claimsFactor: Factor = {
 	id: "claims",
@@ -52,14 +79,15 @@ const createCore = (stepUpSubjects = new Set<string>()) => {
 			claims: factorPluginOf(claimsFactor.verify, { providers: ["email"] }),
 			totp: factorPluginOf(totpFactor.verify, { providers: ["totp"] }),
 		},
-		identities: createMemoryIdentityStore(),
+		accounts: accountsWithTenant(),
 		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
 		tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 		meterStore,
-		secrets: [{ version: 1, value: "http-seal-0123456789abcdefghijklmnop" }],
+		secrets: SECRETS,
 		maximumLifeTimeMilliseconds: 3_600_000,
 		sessionTimeToLiveMilliseconds: 3_600_000,
 		stepUpTimeToLiveMilliseconds: 300_000,
+		registration: () => "allow",
 		policy: ({ subject, proofs }) =>
 			stepUpSubjects.has(subject) &&
 			!proofs.some((proof) => proof.factor === totpFactor.id)
@@ -146,7 +174,14 @@ test("a browser signs in and gets a cookie, never the token in the body", async 
 	const body = await response.json();
 
 	expect(response.status).toBe(200);
-	expect(body).toMatchObject({ tenant: TENANT, email: "a@x.test" });
+	expect(body).toMatchObject({
+		tenant: TENANT,
+		email: "a@x.test",
+		identity: "created",
+		membership: "created",
+	});
+	expect(body.account).toMatch(/^acc_[0-9a-f]{32}$/);
+	expect(body.subject).toMatch(/^sub_[0-9a-f]{32}$/);
 	expect(Object.keys(body)).not.toContain("token");
 	expect(JSON.stringify(body)).not.toContain(
 		cookiesOf(response)[SESSION_COOKIE],

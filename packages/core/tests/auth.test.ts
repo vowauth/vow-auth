@@ -1,6 +1,5 @@
 import {
 	createMemoryEpochStore,
-	createMemoryIdentityStore,
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
@@ -22,8 +21,12 @@ import {
 	meterRuleOf,
 } from "@vow-auth/test-support";
 import { expect, test } from "vitest";
+import { accountsWith } from "./support/accounts.js";
 
 const LIFE_TIME = 60_000;
+const AUTH_SECRETS = [
+	{ version: 1, value: "auth-secret-0123456789abcdefghijklmnop" },
+];
 
 const aliceClaims = {
 	provider: "email",
@@ -90,14 +93,15 @@ const optionsWith = <Factors extends AuthFactors>(
 	audit: AuditSink,
 	factors: Factors,
 ): AuthOptions<Factors> => ({
-	identities: createMemoryIdentityStore(),
+	accounts: accountsWith(["acme"], AUTH_SECRETS),
 	epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
 	tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 	meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
-	secrets: [{ version: 1, value: "auth-secret-0123456789abcdefghijklmnop" }],
+	secrets: AUTH_SECRETS,
 	factors,
 	maximumLifeTimeMilliseconds: LIFE_TIME,
 	sessionTimeToLiveMilliseconds: LIFE_TIME,
+	registration: () => "allow",
 	policy: () => "allow",
 	audit,
 });
@@ -162,10 +166,10 @@ test("one sink reaches every part of the core", async () => {
 	});
 	await auth.sessions.verify("1.garbage");
 	await auth.sessions.revoke({ tenant: "acme", scope: "tenant" });
-	await auth.mutateIdentity("acme", signedIn.value.subject, { type: "delete" });
+	await auth.accounts.delete(signedIn.value.account);
 
 	expect([...new Set(records.map((record) => record.event))].sort()).toEqual([
-		"identity.mutate",
+		"account.delete",
 		"identity.resolve",
 		"meter.consume",
 		"policy.evaluate",
@@ -206,15 +210,28 @@ test("no part of the core issues anything for its caller", () => {
 	const auth = createAuth(optionsWith(quiet, { email: emailFactor }));
 
 	expect(Object.keys(auth).sort()).toEqual([
+		"accounts",
 		"agents",
 		"createLimiter",
 		"devices",
 		"factors",
-		"mutateIdentity",
+		"memberships",
 		"sessions",
 		"signIn",
+		"tenants",
 	]);
 	expect(Object.keys(auth.sessions).sort()).toEqual(["revoke", "verify"]);
+	expect(Object.keys(auth.accounts)).toEqual(["delete"]);
+	expect(Object.keys(auth.memberships).sort()).toEqual([
+		"remove",
+		"restore",
+		"suspend",
+	]);
+	expect(Object.keys(auth.tenants).sort()).toEqual([
+		"create",
+		"disable",
+		"enable",
+	]);
 	expect(auth.factors).toEqual({ email: {} });
 	expect(Object.isFrozen(auth.factors)).toBe(true);
 });
@@ -387,16 +404,27 @@ test("a factor issues no token that continues a sign in or opens another factor"
 	).toEqual(["wrong-purpose", "wrong-purpose"]);
 });
 
-test("the application deletes a subject but cannot confirm an email for anyone", async () => {
+test("the application manages tenants, memberships and accounts, but has no way to create an account, link an identity or confirm an email", async () => {
 	const auth = createAuth(optionsWith(quiet, { email: emailFactor }));
+	const signedIn = await auth.signIn({
+		tenant: "acme",
+		device: "laptop",
+		factor: "email",
+		response: undefined,
+	});
+
+	expect(signedIn.ok).toBe(true);
+
+	for (const part of [auth.accounts, auth.memberships, auth.tenants]) {
+		for (const name of Object.keys(part)) {
+			expect(name).not.toMatch(/create.*account|link|confirm|grant|issue/i);
+		}
+	}
 
 	expect(
-		await auth.mutateIdentity("acme", "anyone", {
-			// @ts-expect-error confirming an email is the sign in's alone
-			type: "confirm-email",
-			proof: {},
-		}),
-	).toEqual({ ok: false, error: "invalid-request" });
+		// @ts-expect-error an account cannot be created by the application
+		auth.accounts.create,
+	).toBeUndefined();
 });
 
 test("factors without the providers they may claim stop the start", () => {

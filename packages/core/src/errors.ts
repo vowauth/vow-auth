@@ -1,9 +1,11 @@
 /** Error codes of refused results. Each refusal of untrusted input reports exactly one of these. */
 export const ERROR_CODES = {
+	conflict: "conflict",
 	forbidden: "forbidden",
 	invalidDelegation: "invalid-delegation",
 	invalidEmail: "invalid-email",
 	invalidProof: "invalid-proof",
+	invalidRecord: "invalid-record",
 	invalidRequest: "invalid-request",
 	invalidSeal: "invalid-seal",
 	invalidSession: "invalid-session",
@@ -12,7 +14,9 @@ export const ERROR_CODES = {
 	noProof: "no-proof",
 	rateLimited: "rate-limited",
 	stepUpRequired: "step-up-required",
+	suspended: "suspended",
 	unavailable: "unavailable",
 	noSubject: "no-subject",
+	noTenant: "no-tenant",
 	noSession: "no-session",
 } as const;

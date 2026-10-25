@@ -1,3 +1,23 @@
+export type {
+	AccountStore,
+	MembershipStatus,
+	StoredAccount,
+	StoredIdentity,
+	StoredMembership,
+	StoredTenant,
+} from "./accounts/account-store.js";
+export type {
+	Accounts,
+	Membership,
+	Memberships,
+	Tenants,
+} from "./accounts/manage.js";
+export {
+	MEMBERSHIP_OUTCOMES,
+	type MembershipOutcome,
+	RESOLUTION_OUTCOMES,
+	type ResolutionOutcome,
+} from "./accounts/plan.js";
 export {
 	AUDIT_EVENTS,
 	AUDIT_OUTCOMES,
@@ -14,7 +34,6 @@ export {
 	type AuthOptions,
 	createAuth,
 	type FactorApis,
-	type SubjectChange,
 } from "./auth.js";
 export {
 	DECISION_KINDS,
@@ -36,21 +55,6 @@ export {
 	type CanonicalEmail,
 	canonicalizeEmail,
 } from "./identity/canonical-email.js";
-export type {
-	IdentityStore,
-	StoredSubject,
-} from "./identity/identity-store.js";
-export {
-	IDENTITY_CHANGE_TYPES,
-	type IdentityChange,
-	type MutateIdentity,
-	type MutationOutcome,
-} from "./identity/mutate-identity.js";
-export {
-	RESOLUTION_OUTCOMES,
-	type Resolution,
-	type ResolutionOutcome,
-} from "./identity/resolve-identity.js";
 export {
 	applyLimit,
 	assertLimit,
@@ -103,6 +107,7 @@ export type {
 	VerifiedSession,
 } from "./session-tokens/session-tokens.js";
 export type {
+	RegistrationPolicyInput,
 	SignedIn,
 	SignIn,
 	SignInPolicyInput,

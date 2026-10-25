@@ -1,13 +1,14 @@
+import type { AccountStore } from "./accounts/account-store.js";
+import {
+	type Accounts,
+	createManagement,
+	type Memberships,
+	type Tenants,
+} from "./accounts/manage.js";
+import { createRecords } from "./accounts/records.js";
 import type { AuditSink } from "./audit.js";
 import { createDevices, type Devices } from "./devices.js";
-import { ERROR_CODES } from "./errors.js";
 import type { FactorPlugin } from "./factor.js";
-import type { IdentityStore } from "./identity/identity-store.js";
-import {
-	createMutateIdentity,
-	IDENTITY_CHANGE_TYPES,
-	type MutationOutcome,
-} from "./identity/mutate-identity.js";
 import {
 	createLimiter,
 	type Limiter,
@@ -15,8 +16,8 @@ import {
 } from "./meter/limiter.js";
 import { createMeter } from "./meter/meter.js";
 import type { MeterStore } from "./meter/meter-store.js";
-import type { Factor } from "./proof.js";
-import { fail, type Result } from "./result.js";
+import { EMAIL_PROVIDER, type Factor } from "./proof.js";
+import { createRecordSeal } from "./record-seal.js";
 import { createSealer, type SecretVersion } from "./sealer.js";
 import type { EpochStore } from "./session-tokens/epoch-store.js";
 import {
@@ -24,8 +25,10 @@ import {
 	type SessionTokens,
 } from "./session-tokens/session-tokens.js";
 import { isStorableText } from "./shared/is-storable-text.js";
+import { own } from "./shared/own.js";
 import {
 	createSignIn,
+	type RegistrationPolicyInput,
 	type SignIn,
 	type SignInPolicyInput,
 } from "./sign-in.js";
@@ -47,11 +50,17 @@ export type FactorApis<Factors extends AuthFactors> = {
 
 /** Everything the core needs to run. */
 export type AuthOptions<Factors extends AuthFactors = AuthFactors> = {
-	readonly identities: IdentityStore;
+	/** Tenants, accounts, their identities and memberships. */
+	readonly accounts: AccountStore;
 	readonly epochs: EpochStore;
 	readonly tokenStore: TokenStore;
 	readonly meterStore: MeterStore;
-	/** Server secrets for sealed values and session tokens, newest first. */
+	/**
+	 * Server secrets for sealed values, session tokens and the seals of
+	 * records, newest first. Records sealed under an older secret are sealed
+	 * again at their next sign in; keep a secret listed until no record uses
+	 * it, or those records stop opening.
+	 */
 	readonly secrets: readonly SecretVersion[];
 	/**
 	 * The factors people sign in with, by id. The engine creates each one
@@ -59,6 +68,14 @@ export type AuthOptions<Factors extends AuthFactors = AuthFactors> = {
 	 * its id and cannot bring one of its own.
 	 */
 	readonly factors: Factors;
+	/**
+	 * The providers whose verified emails are believed: such an email links a
+	 * new identity to the account that owns it, and makes its owner. A verified
+	 * email from any other provider counts as unverified. Every provider listed
+	 * must be one a factor of the engine claims. `["email"]` when left out: the
+	 * link to the address itself.
+	 */
+	readonly trustedProviders?: readonly string[] | undefined;
 	/** The longest life time of any session token. */
 	readonly maximumLifeTimeMilliseconds: number;
 	readonly sessionTimeToLiveMilliseconds: number;
@@ -68,6 +85,13 @@ export type AuthOptions<Factors extends AuthFactors = AuthFactors> = {
 	 * verdict becomes a deny.
 	 */
 	readonly stepUpTimeToLiveMilliseconds?: number | undefined;
+	/**
+	 * Answers `"allow"` to let a sign in create an account or a membership, or
+	 * bring a removed one back; anything else refuses, and nothing is written.
+	 * It is required on purpose, like the audit: open registration is a
+	 * decision too, `() => "allow"`.
+	 */
+	readonly registration: (input: RegistrationPolicyInput) => unknown;
 	/** Answers `"allow"` to let a subject in; anything else keeps them out. */
 	readonly policy: (input: SignInPolicyInput) => unknown;
 	/**
@@ -76,11 +100,6 @@ export type AuthOptions<Factors extends AuthFactors = AuthFactors> = {
 	 * cannot be lost. To run without an audit, pass a sink that does nothing.
 	 */
 	readonly audit: AuditSink;
-};
-
-/** The change of a subject the application may ask for. */
-export type SubjectChange = {
-	readonly type: typeof IDENTITY_CHANGE_TYPES.delete;
 };
 
 /**
@@ -116,16 +135,12 @@ export type Auth<Factors extends AuthFactors = AuthFactors> = {
 	createLimiter<Input>(
 		options: Omit<LimiterOptions<Input>, "meter">,
 	): Limiter<Input>;
-	/**
-	 * Deletes a subject with every consequence. Confirming an email is not
-	 * here: a sign in with a verified email does it, with a proof only a
-	 * factor of the engine can give.
-	 */
-	mutateIdentity(
-		tenant: string,
-		subject: string,
-		change: SubjectChange,
-	): Promise<Result<MutationOutcome>>;
+	/** Tenants: a sign in reaches only one that the application created and did not disable. */
+	readonly tenants: Tenants;
+	/** Accounts, which only a sign in creates; the application deletes them. */
+	readonly accounts: Accounts;
+	/** Memberships, which only a sign in creates; the application suspends, removes and restores them. */
+	readonly memberships: Memberships;
 };
 
 const registerFactors = (
@@ -136,9 +151,11 @@ const registerFactors = (
 ): {
 	readonly factors: ReadonlyMap<string, Factor>;
 	readonly apis: Readonly<Record<string, unknown>>;
+	readonly forget: (account: string) => Promise<void>;
 } => {
 	const factors = new Map<string, Factor>();
 	const apis: Record<string, unknown> = {};
+	const forgetters: ((account: string) => Promise<void>)[] = [];
 
 	for (const [id, plugin] of Object.entries(plugins)) {
 		if (!FACTOR_ID.test(id)) {
@@ -166,9 +183,48 @@ const registerFactors = (
 			verify: (response, context) => instance.verify(response, context),
 		});
 		apis[id] = instance.api;
+
+		const forget = instance.forget;
+
+		if (typeof forget === "function") {
+			forgetters.push((account) => forget.call(instance, account));
+		}
 	}
 
-	return { factors, apis: Object.freeze(apis) };
+	return {
+		factors,
+		apis: Object.freeze(apis),
+		async forget(account) {
+			for (const forgetOne of forgetters) {
+				await forgetOne(account);
+			}
+		},
+	};
+};
+
+const requireTrustedProviders = (
+	trusted: readonly string[] | undefined,
+	factors: ReadonlyMap<string, Factor>,
+): readonly string[] => {
+	const providers = trusted ?? [EMAIL_PROVIDER];
+
+	if (!Array.isArray(providers) || !providers.every(isStorableText)) {
+		throw new RangeError("trustedProviders must be a list of provider names");
+	}
+
+	const claimed = new Set(
+		Array.from(factors.values()).flatMap((factor) => factor.providers ?? []),
+	);
+
+	for (const provider of providers) {
+		if (trusted !== undefined && !claimed.has(provider)) {
+			throw new RangeError(
+				`The trusted provider ${JSON.stringify(provider)} is claimed by no factor of the engine`,
+			);
+		}
+	}
+
+	return Object.freeze([...providers]);
 };
 
 /**
@@ -186,6 +242,12 @@ export function createAuth<const Factors extends AuthFactors>(
 	if (typeof audit !== "function") {
 		throw new TypeError(
 			"audit is required: pass a sink, or one that does nothing to run without an audit",
+		);
+	}
+
+	if (typeof options.registration !== "function") {
+		throw new TypeError(
+			'registration is required: a policy for new accounts and memberships, () => "allow" to let anyone in',
 		);
 	}
 
@@ -213,7 +275,7 @@ export function createAuth<const Factors extends AuthFactors>(
 		limiterOptions: Omit<LimiterOptions<Input>, "meter">,
 	): Limiter<Input> => createLimiter({ ...limiterOptions, meter });
 
-	const { factors, apis } = registerFactors(options.factors, (id) => ({
+	const { factors, apis, forget } = registerFactors(options.factors, (id) => ({
 		tokens: createTokens({
 			store: options.tokenStore,
 			domain: `factor:${id}`,
@@ -234,18 +296,27 @@ export function createAuth<const Factors extends AuthFactors>(
 		audit,
 	});
 
-	const mutateIdentity = createMutateIdentity({
-		store: options.identities,
+	const trustedProviders = requireTrustedProviders(
+		own(options, "trustedProviders"),
+		factors,
+	);
+	const records = createRecords(createRecordSeal({ secrets: options.secrets }));
+	const management = createManagement({
+		store: options.accounts,
+		records,
 		sessionTokens,
+		forget,
 		audit,
 	});
 
 	const signIn = createSignIn({
 		factors,
-		identities: options.identities,
+		accounts: options.accounts,
+		records,
+		trustedProviders,
 		sessionTokens,
-		mutateIdentity,
 		tokens: createTokens({ store: options.tokenStore, domain: "core", audit }),
+		registration: options.registration,
 		policy: options.policy,
 		sessionTimeToLiveMilliseconds: options.sessionTimeToLiveMilliseconds,
 		stepUpTimeToLiveMilliseconds: options.stepUpTimeToLiveMilliseconds,
@@ -268,12 +339,8 @@ export function createAuth<const Factors extends AuthFactors>(
 			timeToLiveMilliseconds: DEVICE_LIFE_TIME_MILLISECONDS,
 		}),
 		createLimiter: limiterFor,
-		async mutateIdentity(tenant, subject, change) {
-			return change?.type === IDENTITY_CHANGE_TYPES.delete
-				? mutateIdentity(tenant, subject, {
-						type: IDENTITY_CHANGE_TYPES.delete,
-					})
-				: fail(ERROR_CODES.invalidRequest);
-		},
+		tenants: management.tenants,
+		accounts: management.accounts,
+		memberships: management.memberships,
 	};
 }

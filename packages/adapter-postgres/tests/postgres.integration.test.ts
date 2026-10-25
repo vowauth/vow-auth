@@ -3,13 +3,13 @@ import {
 	createMemoryMeterStore,
 } from "@vow-auth/adapter-memory";
 import {
-	createPostgresIdentityStore,
+	createPostgresAccountStore,
 	createPostgresSchema,
 	createPostgresTokenStore,
 	POSTGRES_SCHEMA,
 	type PostgresRunner,
 } from "@vow-auth/adapter-postgres";
-import { canonicalizeEmail, createAuth, succeed } from "@vow-auth/core";
+import { createAuth, succeed } from "@vow-auth/core";
 import { factorPluginOf } from "@vow-auth/test-support";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
@@ -33,9 +33,67 @@ describe.runIf(databaseUrl !== undefined)("postgres specifics", () => {
 	};
 
 	beforeAll(async () => {
-		await admin.query(`create schema if not exists ${SCHEMA}`);
+		await admin.query(`drop schema if exists ${SCHEMA} cascade`);
+		await admin.query(`create schema ${SCHEMA}`);
 		await createPostgresSchema(run);
 	});
+
+	const textOf = (response: unknown, key: string): string =>
+		String(Reflect.get(Object(response), key) ?? "");
+
+	/** The engine on these tables, with a tenant of its own. */
+	const createEngine = async () => {
+		const tenant = `tenant-${crypto.randomUUID()}`;
+		const auth = createAuth({
+			factors: {
+				email: factorPluginOf(
+					async (response) =>
+						succeed({
+							provider: "email",
+							externalId: textOf(response, "email"),
+							email: textOf(response, "email"),
+							emailVerified: true,
+						}),
+					{ providers: ["email"] },
+				),
+				password: factorPluginOf(
+					async (response) =>
+						succeed({
+							provider: "password",
+							externalId: textOf(response, "email"),
+							email: textOf(response, "email"),
+							emailVerified: false,
+						}),
+					{ providers: ["password"] },
+				),
+			},
+			accounts: createPostgresAccountStore(run),
+			tokenStore: createPostgresTokenStore(run),
+			epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
+			meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
+			secrets: [
+				{ version: 1, value: "postgres-secret-0123456789abcdefghijkl" },
+			],
+			maximumLifeTimeMilliseconds: HOUR,
+			sessionTimeToLiveMilliseconds: HOUR,
+			registration: () => "allow",
+			policy: () => "allow",
+			audit: async () => undefined,
+		});
+
+		expect((await auth.tenants.create(tenant)).ok).toBe(true);
+
+		const signIn = (factor: string, email: string, device = "laptop") =>
+			auth.signIn({ tenant, device, factor, response: { email } });
+
+		return { auth, tenant, signIn };
+	};
+
+	const countOf = async (statement: string, parameters: unknown[]) => {
+		const result = await pool.query(statement, parameters);
+
+		return Number(result.rows[0]?.count);
+	};
 
 	afterAll(async () => {
 		await pool.end();
@@ -60,8 +118,10 @@ describe.runIf(databaseUrl !== undefined)("postgres specifics", () => {
 			);
 
 			expect(tables.rows.map((row) => row.table_name)).toEqual([
+				"vow_auth_accounts",
 				"vow_auth_identities",
 				"vow_auth_subjects",
+				"vow_auth_tenants",
 				"vow_auth_tokens",
 			]);
 		} finally {
@@ -71,84 +131,88 @@ describe.runIf(databaseUrl !== undefined)("postgres specifics", () => {
 		}
 	});
 
-	test("parallel sign-ins of one identity leave exactly one subject", async () => {
-		const store = createPostgresIdentityStore(run);
-		const tenant = `tenant-${crypto.randomUUID()}`;
-		const claims = {
-			provider: "email",
-			externalId: "alice",
-			emailVerified: false,
-		} as const;
-
-		await Promise.all(
-			Array.from({ length: 16 }, () => store.createSubject(tenant, claims)),
+	test("parallel first sign ins of one person leave exactly one account and one subject", async () => {
+		const { signIn, tenant } = await createEngine();
+		const email = `${crypto.randomUUID()}@example.com`;
+		const results = await Promise.all(
+			Array.from({ length: 16 }, (_, index) =>
+				signIn("email", email, `device-${index}`),
+			),
 		);
 
-		const subjects = await pool.query(
-			"select count(*)::int as count from vow_auth_subjects where tenant = $1",
-			[tenant],
-		);
-
-		expect(subjects.rows[0]?.count).toBe(1);
+		expect(results.some((result) => result.ok)).toBe(true);
+		expect(
+			results.every((result) => result.ok || result.error === "conflict"),
+		).toBe(true);
+		expect(
+			await countOf(
+				"select count(*)::int as count from vow_auth_identities where provider = 'email' and external_id = $1",
+				[email],
+			),
+		).toBe(1);
+		expect(
+			await countOf(
+				"select count(*)::int as count from vow_auth_subjects where tenant = $1",
+				[tenant],
+			),
+		).toBe(1);
+		expect(
+			await countOf(
+				"select count(*)::int as count from vow_auth_accounts as account where not exists (select 1 from vow_auth_identities as identity where identity.account_id = account.id)",
+				[],
+			),
+		).toBe(0);
 	});
 
-	test("a foreign key of the application neither blocks an eviction nor loses its rows to it", async () => {
-		const store = createPostgresIdentityStore(run);
-		const tenant = `tenant-${crypto.randomUUID()}`;
-		const email = canonicalizeEmail("victim@example.com");
-
-		if (email === undefined) {
-			throw new Error("the test address must be valid");
-		}
+	test("a foreign key of the application blocks neither an eviction nor the deletion of an account, and loses no rows to them", async () => {
+		const { auth, signIn } = await createEngine();
+		const email = `${crypto.randomUUID()}@example.com`;
 
 		await pool.query(`create table if not exists app_notes (
 			subject_id text not null references vow_auth_subjects (id) on delete restrict
 		)`);
-		await pool.query(`create table if not exists app_profiles (
-			subject_id text primary key references vow_auth_subjects (id) on delete cascade
-		)`);
 
-		const squatter = await store.createSubject(tenant, {
-			provider: "evil",
-			externalId: `e-${crypto.randomUUID()}`,
-			email,
-			emailVerified: false,
-		});
-		const owner = await store.createSubject(tenant, {
-			provider: "email",
-			externalId: `victim-${crypto.randomUUID()}`,
-			email,
-			emailVerified: true,
-		});
+		const squatter = await signIn("password", email);
+		const owner = await signIn("email", email);
 
-		await pool.query("insert into app_notes values ($1)", [squatter.subjectId]);
-		await pool.query("insert into app_profiles values ($1)", [owner.subjectId]);
+		if (!squatter.ok || !owner.ok) {
+			throw new Error("both sign ins must pass");
+		}
 
+		expect(owner.value.evicted).toEqual([squatter.value.account]);
+
+		await pool.query("insert into app_notes values ($1), ($2)", [
+			squatter.value.subject,
+			owner.value.subject,
+		]);
+
+		const deleted = await auth.accounts.delete(owner.value.account);
+
+		expect(deleted.ok && deleted.value).toEqual([
+			{
+				tenant: owner.value.tenant,
+				subject: owner.value.subject,
+				status: "removed",
+			},
+		]);
 		expect(
-			await store.removeUnverifiedEmailClaims(tenant, email, owner.subjectId),
-		).toEqual([squatter.subjectId]);
-
-		const notes = await pool.query(
-			"select count(*)::int as count from app_notes where subject_id = $1",
-			[squatter.subjectId],
-		);
-
-		expect(notes.rows[0]?.count).toBe(1);
+			await countOf(
+				"select count(*)::int as count from app_notes where subject_id = any($1)",
+				[[squatter.value.subject, owner.value.subject]],
+			),
+		).toBe(2);
 		expect(
-			(await store.getSubject(tenant, squatter.subjectId))
-				?.evictedAtMilliseconds,
-		).toEqual(expect.any(Number));
-		expect(await store.deleteSubject(tenant, owner.subjectId)).toBe(true);
-
-		const profiles = await pool.query(
-			"select count(*)::int as count from app_profiles where subject_id = $1",
-			[owner.subjectId],
-		);
-
-		expect(profiles.rows[0]?.count).toBe(0);
-		await expect(
-			store.deleteSubject(tenant, squatter.subjectId),
-		).rejects.toThrow();
+			await countOf(
+				"select count(*)::int as count from vow_auth_subjects where id = $1 and account_id is null and status = 'removed'",
+				[owner.value.subject],
+			),
+		).toBe(1);
+		expect(
+			await countOf(
+				"select count(*)::int as count from vow_auth_accounts where id = $1 and evicted_at_milliseconds is not null",
+				[squatter.value.account],
+			),
+		).toBe(1);
 	});
 
 	test("purging removes the expired tokens by the server's clock and keeps the rest", async () => {
@@ -205,7 +269,7 @@ describe.runIf(databaseUrl !== undefined)("postgres specifics", () => {
 					{ providers: ["idp"] },
 				),
 			},
-			identities: createPostgresIdentityStore(run),
+			accounts: createPostgresAccountStore(run),
 			tokenStore: createPostgresTokenStore(run),
 			epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
 			meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
@@ -214,9 +278,13 @@ describe.runIf(databaseUrl !== undefined)("postgres specifics", () => {
 			],
 			maximumLifeTimeMilliseconds: HOUR,
 			sessionTimeToLiveMilliseconds: HOUR,
+			registration: () => "allow",
 			policy: () => "allow",
 			audit: async () => undefined,
 		});
+
+		await auth.tenants.create("acme");
+
 		const NUL = String.fromCharCode(0);
 		const LONE_SURROGATE = String.fromCharCode(0xd800);
 		const attempts = [

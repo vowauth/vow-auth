@@ -9,6 +9,13 @@ const toHex = (bytes: Uint8Array): string => {
 	return Array.from(bytes, (byte) => HEX_BYTE_TABLE[byte]).join("");
 };
 
+const ID_BYTES = 16;
+
+/** An id the engine chooses: the prefix and 128 random bits in hex, such as `acc_3f…`. */
+export const generateId = (prefix: string): string => {
+	return prefix + toHex(crypto.getRandomValues(new Uint8Array(ID_BYTES)));
+};
+
 export const generateSecret = (): string => {
 	return toHex(crypto.getRandomValues(new Uint8Array(SECRET_BYTES)));
 };

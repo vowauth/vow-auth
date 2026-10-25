@@ -1,12 +1,20 @@
+export { type ApplyOptions, applyPlan } from "./accounts/apply.js";
+export {
+	createManagement,
+	type ManagementOptions,
+} from "./accounts/manage.js";
+export {
+	type PlanOptions,
+	type PlanWrites,
+	planSignIn,
+	type SignInPlan,
+} from "./accounts/plan.js";
+export {
+	createRecords,
+	type Records,
+	type Unsealed,
+} from "./accounts/records.js";
 export { type EvaluatePolicyOptions, evaluatePolicy } from "./decision.js";
-export {
-	createMutateIdentity,
-	type MutateIdentityOptions,
-} from "./identity/mutate-identity.js";
-export {
-	type ResolveIdentityOptions,
-	resolveIdentity,
-} from "./identity/resolve-identity.js";
 export * from "./index.js";
 export {
 	createLimiter,
@@ -18,6 +26,12 @@ export {
 	type MeterOptions,
 } from "./meter/meter.js";
 export { type VerifyProofOptions, verifyProof } from "./proof.js";
+export {
+	createRecordSeal,
+	type RecordCheck,
+	type RecordField,
+	type RecordSeal,
+} from "./record-seal.js";
 export {
 	createSealer,
 	type SealDomain,

@@ -1,6 +1,6 @@
 import {
+	createMemoryAccountStore,
 	createMemoryEpochStore,
-	createMemoryIdentityStore,
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
@@ -55,13 +55,14 @@ const createFixture = () => {
 		factors: {
 			email: factorPluginOf(emailFactor.verify, { providers: ["email"] }),
 		},
-		identities: createMemoryIdentityStore(),
+		accounts: createMemoryAccountStore(),
 		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
 		tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 		meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
 		secrets: [{ version: 1, value: SECRET }],
 		maximumLifeTimeMilliseconds: MAXIMUM_LIFE,
 		sessionTimeToLiveMilliseconds: 30 * MINUTE,
+		registration: () => "allow",
 		policy: () => "allow",
 		audit: async (record) => {
 			records.push(record);
@@ -69,6 +70,8 @@ const createFixture = () => {
 	});
 
 	const signIn = async (address: string, device: string, tenant = "acme") => {
+		await auth.tenants.create(tenant);
+
 		const result = await auth.signIn({
 			tenant,
 			device,
@@ -243,7 +246,7 @@ test("A8: deleting the person ends their agents too", async () => {
 	const alice = await signIn("alice@example.com", "laptop");
 	const agent = await delegate(alice.token, "mcp-client-7");
 
-	await auth.mutateIdentity("acme", alice.subject, { type: "delete" });
+	await auth.accounts.delete(alice.account);
 
 	expect(await alive(agent.token)).toBe(false);
 });

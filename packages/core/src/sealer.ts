@@ -8,6 +8,7 @@ import {
 import { type Duration, isDuration } from "./duration.js";
 import { ERROR_CODES } from "./errors.js";
 import { fail, type Result, succeed } from "./result.js";
+import { fromBase64Url, toBase64Url } from "./shared/base64-url.js";
 import { isPlainObject } from "./shared/is-plain-object.js";
 import { own } from "./shared/own.js";
 import { safeParseJson } from "./shared/safe-parse-json.js";
@@ -119,7 +120,8 @@ const consistsOf = (text: string, alphabet: Set<string>): boolean => {
 	);
 };
 
-const parseSealed = (
+/** The secret version and the body of a sealed value or a record seal, `<version>.<base64url>`. */
+export const parseSealed = (
 	sealed: string,
 ): { readonly version: number; readonly body: string } | undefined => {
 	const separator = sealed.indexOf(".");
@@ -141,20 +143,6 @@ const parseSealed = (
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-
-const toBase64Url = (bytes: Uint8Array): string => {
-	return btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""))
-		.replaceAll("+", "-")
-		.replaceAll("/", "_")
-		.replaceAll("=", "");
-};
-
-const fromBase64Url = (text: string): Uint8Array<ArrayBuffer> => {
-	return Uint8Array.from(
-		atob(text.replaceAll("-", "+").replaceAll("_", "/")),
-		(character) => character.charCodeAt(0),
-	);
-};
 
 const randomBytes = (length: number): Uint8Array<ArrayBuffer> => {
 	return crypto.getRandomValues(new Uint8Array(length));
@@ -228,7 +216,8 @@ const looksRandom = (value: string): boolean => {
 	);
 };
 
-const requireValidSecrets = (
+/** Checks every secret version and returns the newest one; throws on anything a sealer must not run with. */
+export const requireValidSecrets = (
 	secrets: readonly SecretVersion[],
 ): SecretVersion => {
 	const [current] = secrets;

@@ -2,9 +2,11 @@ import type { ValueOf } from "./shared/value-of.js";
 
 /** Names of the events the core reports. Applications may report their own events through the same sink. */
 export const AUDIT_EVENTS = {
+	accountDelete: "account.delete",
+	accountEvict: "account.evict",
 	delegationGrant: "delegation.grant",
-	identityMutate: "identity.mutate",
 	identityResolve: "identity.resolve",
+	membershipChange: "membership.change",
 	meterConsume: "meter.consume",
 	policyEvaluate: "policy.evaluate",
 	proofVerify: "proof.verify",
@@ -14,6 +16,7 @@ export const AUDIT_EVENTS = {
 	signInContinue: "signin.continue",
 	sessionVerify: "session.verify",
 	tokenConsume: "token.consume",
+	tenantChange: "tenant.change",
 	tokenIssue: "token.issue",
 } as const;
 
@@ -35,9 +38,13 @@ export type AuditOutcome = ValueOf<typeof AUDIT_OUTCOMES>;
  */
 export const AUDIT_REASONS = {
 	capacity: "capacity",
+	conflict: "conflict",
 	consumed: "consumed",
+	created: "created",
 	deleted: "deleted",
-	emailConfirmed: "email-confirmed",
+	disabled: "disabled",
+	enabled: "enabled",
+	evicted: "evicted",
 	expired: "expired",
 	factorError: "factor-error",
 	factorRejected: "factor-rejected",
@@ -45,6 +52,7 @@ export const AUDIT_REASONS = {
 	forbidden: "forbidden",
 	invalidClaims: "invalid-claims",
 	invalidEmail: "invalid-email",
+	invalidRecord: "invalid-record",
 	invalidSeal: "invalid-seal",
 	issued: "issued",
 	limitExceeded: "limit-exceeded",
@@ -53,8 +61,11 @@ export const AUDIT_REASONS = {
 	noProof: "no-proof",
 	notFound: "not-found",
 	notOwner: "not-owner",
+	removed: "removed",
+	restored: "restored",
 	revoked: "revoked",
 	stepUp: "step-up",
+	suspended: "suspended",
 	undecryptable: "undecryptable",
 	unverified: "unverified",
 	unknownVersion: "unknown-version",

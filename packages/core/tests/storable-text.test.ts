@@ -1,15 +1,18 @@
 import {
 	createMemoryEpochStore,
-	createMemoryIdentityStore,
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
-import { createAuth, fail, type IdentityStore, succeed } from "@vow-auth/core";
+import { type AccountStore, createAuth, fail, succeed } from "@vow-auth/core";
 import { durationOf, factorPluginOf } from "@vow-auth/test-support";
 import fastCheck from "fast-check";
 import { expect, test } from "vitest";
+import { accountsWith } from "./support/accounts.js";
 
 const MINUTE = 60_000;
+const SECRETS = [
+	{ version: 1, value: "storable-secret-0123456789abcdefghijk" },
+];
 
 const spyOn = <Store extends object>(store: Store, calls: string[]): Store => {
 	const spied = { ...store };
@@ -39,22 +42,23 @@ const goodClaims = {
 
 const createFixture = () => {
 	const calls: string[] = [];
-	const identities: IdentityStore = spyOn(createMemoryIdentityStore(), calls);
+	const accounts: AccountStore = spyOn(accountsWith(["acme"], SECRETS), calls);
 	const auth = createAuth({
 		factors: {
 			claims: claimsFactor,
 			failing: factorPluginOf(async () => fail("x")),
 		},
-		identities,
+		accounts,
 		epochs: spyOn(createMemoryEpochStore({ maximumBytes: 1_000_000 }), calls),
 		tokenStore: spyOn(
 			createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 			calls,
 		),
 		meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
-		secrets: [{ version: 1, value: "storable-secret-0123456789abcdefghijk" }],
+		secrets: SECRETS,
 		maximumLifeTimeMilliseconds: 60 * MINUTE,
 		sessionTimeToLiveMilliseconds: 30 * MINUTE,
+		registration: () => "allow",
 		policy: () => "allow",
 		audit: async () => undefined,
 	});
@@ -118,18 +122,15 @@ test("a name with a control character or a lone surrogate stops at the border, b
 					response: { ...goodClaims, externalId: bad },
 				}),
 			).toEqual({ ok: false, error: "invalid-proof" });
-			expect(
-				await auth.mutateIdentity(bad, "subject", { type: "delete" }),
-			).toEqual({
-				ok: false,
-				error: "invalid-request",
-			});
-			expect(
-				await auth.mutateIdentity("acme", bad, { type: "delete" }),
-			).toEqual({
-				ok: false,
-				error: "invalid-request",
-			});
+			for (const refused of [
+				await auth.memberships.suspend(bad, "subject"),
+				await auth.memberships.remove("acme", bad),
+				await auth.accounts.delete(bad),
+				await auth.tenants.create(bad),
+				await auth.tenants.disable(bad),
+			]) {
+				expect(refused).toEqual({ ok: false, error: "invalid-request" });
+			}
 			expect(calls).toEqual([]);
 		}),
 		{ numRuns: 200 },
@@ -176,6 +177,9 @@ test("names that people really use are accepted", async () => {
 		"tenant-1",
 	]) {
 		const { auth } = createFixture();
+
+		expect((await auth.tenants.create(name)).ok, name).toBe(true);
+
 		const result = await auth.signIn({
 			tenant: name,
 			device: name,

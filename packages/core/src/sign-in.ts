@@ -1,3 +1,14 @@
+import type { AccountStore } from "./accounts/account-store.js";
+import { applyPlan } from "./accounts/apply.js";
+import {
+	MEMBERSHIP_OUTCOMES,
+	type MembershipOutcome,
+	planSignIn,
+	RESOLUTION_OUTCOMES,
+	type ResolutionOutcome,
+	type SignInPlan,
+} from "./accounts/plan.js";
+import type { Records } from "./accounts/records.js";
 import {
 	AUDIT_EVENTS,
 	AUDIT_OUTCOMES,
@@ -8,17 +19,11 @@ import {
 import { DECISION_KINDS, evaluatePolicy } from "./decision.js";
 import { type Duration, defineDuration } from "./duration.js";
 import { ERROR_CODES } from "./errors.js";
-import type { IdentityStore } from "./identity/identity-store.js";
-import type { MutateIdentity } from "./identity/mutate-identity.js";
-import {
-	RESOLUTION_OUTCOMES,
-	type ResolutionOutcome,
-	resolveIdentity,
-} from "./identity/resolve-identity.js";
 import {
 	type Factor,
 	type Proof,
 	restoreProof,
+	sameClaims,
 	serializeProof,
 	verifyProof,
 } from "./proof.js";
@@ -37,20 +42,48 @@ const CONTINUATION_PURPOSE = "sign-in-continuation";
 export type SignInPolicyInput = {
 	readonly subject: string;
 	readonly tenant: string;
+	readonly account: string;
 	/** The proof that was just made. */
 	readonly proof: Proof;
 	/** Every proof of this sign-in so far, in order; the last one is `proof`. */
 	readonly proofs: readonly Proof[];
 };
 
+/**
+ * What the registration policy is asked about: a sign in that would create
+ * an account, create a membership, or bring a removed one back. Nothing is
+ * written yet; the ids are the ones the writes will use.
+ */
+export type RegistrationPolicyInput = {
+	readonly tenant: string;
+	readonly account: string;
+	readonly subject: string;
+	readonly proof: Proof;
+	readonly proofs: readonly Proof[];
+	readonly newAccount: boolean;
+	readonly newMembership:
+		| typeof MEMBERSHIP_OUTCOMES.created
+		| typeof MEMBERSHIP_OUTCOMES.rejoined
+		| undefined;
+	/**
+	 * Another account owns the email of the identity this sign in would
+	 * create. Refuse to tell the person to sign in the way they did before.
+	 */
+	readonly emailOwnedByAnotherAccount: boolean;
+};
+
 /** Options for creating the sign-in flow. */
 export type SignInOptions = {
 	/** The factors of the engine by id; a sign in names one of them. */
 	readonly factors: ReadonlyMap<string, Factor>;
-	readonly identities: IdentityStore;
-	readonly sessionTokens: Pick<SessionTokens, "issue">;
-	readonly mutateIdentity: MutateIdentity;
+	readonly accounts: AccountStore;
+	readonly records: Records;
+	/** The providers whose verified emails link accounts and count as verified. */
+	readonly trustedProviders: readonly string[];
+	readonly sessionTokens: Pick<SessionTokens, "issue" | "revoke">;
 	readonly tokens: Pick<Tokens, "issue" | "consume">;
+	/** Answers `"allow"` to let a sign in create an account or a membership, or bring one back; anything else refuses. */
+	readonly registration: (input: RegistrationPolicyInput) => unknown;
 	/**
 	 * Answers `"allow"` to let the subject in, or `requireFactor(id)` to ask for
 	 * one more factor; anything else keeps them out. Sees the proofs, so it can
@@ -81,18 +114,22 @@ export type SignInRequest = {
 export type SignedIn = {
 	readonly token: string;
 	readonly tenant: string;
+	readonly account: string;
 	readonly subject: string;
 	readonly device: string;
 	readonly session: string;
 	readonly identity: ResolutionOutcome;
+	readonly membership: MembershipOutcome;
 	readonly email: string | undefined;
+	/** The accounts whose unverified claims of the proven email were evicted. */
 	readonly evicted: readonly string[];
 };
 
 /**
  * The refusal that is not a refusal of the person: the policy wants one more
- * factor. Nothing is signed in. Run the factor with this id and send its
- * response with the continuation, within the time the flow allows.
+ * factor. Nothing is signed in and nothing is written. Run the factor with
+ * this id and send its response with the continuation, within the time the
+ * flow allows.
  */
 export type StepUpRequired = {
 	readonly code: typeof ERROR_CODES.stepUpRequired;
@@ -109,13 +146,9 @@ export type SignIn = (
 ) => Promise<Result<SignedIn, SignInRefusal>>;
 
 type Progress = {
-	readonly tenant: string;
 	readonly device: string;
-	readonly subjectId: string;
+	readonly plan: SignInPlan;
 	readonly proofs: readonly Proof[];
-	readonly outcome: ResolutionOutcome;
-	readonly email: string | undefined;
-	readonly evicted: readonly string[];
 };
 
 const OUTCOMES: readonly ResolutionOutcome[] =
@@ -143,44 +176,39 @@ const parseProofs = (raw: string | undefined): readonly Proof[] | undefined => {
 	return proofs;
 };
 
-const parseEvicted = (
-	raw: string | undefined,
-): readonly string[] | undefined => {
-	const parsed = raw === undefined ? undefined : safeParseJson(raw);
-
-	return Array.isArray(parsed) &&
-		parsed.every((subject) => typeof subject === "string")
-		? parsed
-		: undefined;
-};
-
 /**
  * Creates the sign-in flow, the only road to a session: prove with a factor
- * of the engine, named by its id,
- * resolve the identity, confirm a verified email against earlier claims, ask
- * the policy, then issue the session and its token. Every factor, present and
- * future, takes the same road, so a new factor is under the same policy,
- * audit and email confirmation without touching any other code. A factor
- * cannot create a session: the function that does is not part of the public
- * API. Every refusal reports the error of the step that refused.
+ * of the engine, named by its id; plan who this is and what letting them in
+ * would change, reading only; ask the registration policy when the plan
+ * creates an account or a membership or brings one back; ask the sign-in
+ * policy; and only when both allow, write the plan, evict the unverified
+ * claims of a proven email, and issue the session and its token. A refused
+ * or unfinished sign in writes nothing. Every factor, present and future,
+ * takes the same road, so a new factor is under the same policies, audit and
+ * eviction without touching any other code. A factor cannot create a session:
+ * the function that does is not part of the public API. Every refusal reports
+ * the error of the step that refused.
  *
- * When the policy asks for one more factor with `requireFactor`, nothing is
- * signed in: the flow refuses with `step-up-required`, naming the factor and
- * handing out a one-time continuation that holds the proofs so far. The
- * second step presents the continuation with that factor's response. The
- * continuation is spent by the first try, right or wrong, so guessing the
- * second factor costs a full first step every time; the second factor must
- * identify the same subject, or the sign in is refused. The policy then sees
- * every proof and decides again. The session records which factors were
- * passed and when.
+ * When the policy asks for one more factor with `requireFactor`, the flow
+ * refuses with `step-up-required`, naming the factor and handing out a
+ * one-time continuation that holds the proofs so far. The second step
+ * presents the continuation with that factor's response. The continuation is
+ * spent by the first try, right or wrong, so guessing the second factor costs
+ * a full first step every time. The second factor must repeat the claims of
+ * an earlier proof or prove an identity of the same account; the plan is made
+ * again from the first proof, since the records may have changed in between,
+ * and both policies decide again with every proof. The session records which
+ * factors were passed and when.
  */
 export function createSignIn(options: SignInOptions): SignIn {
 	const {
 		factors,
-		identities,
+		accounts,
+		records,
+		trustedProviders,
 		sessionTokens,
-		mutateIdentity,
 		tokens,
+		registration,
 		policy,
 		sessionTimeToLiveMilliseconds,
 		audit,
@@ -208,20 +236,63 @@ export function createSignIn(options: SignInOptions): SignIn {
 		? stepUpTimeToLive.value
 		: undefined;
 
+	const plan = (tenant: string, proof: Proof) =>
+		planSignIn(
+			{ store: accounts, records, trustedProviders, audit },
+			tenant,
+			proof,
+		);
+
 	const conclude = async (
 		progress: Progress,
 	): Promise<Result<SignedIn, SignInRefusal>> => {
-		const { tenant, device, subjectId, proofs } = progress;
+		const { device, plan: current, proofs } = progress;
+		const { tenant, accountId, subjectId } = current;
 		const latest = proofs[proofs.length - 1];
+		const first = proofs[0];
 
-		if (latest === undefined) {
+		if (latest === undefined || first === undefined) {
 			return fail(ERROR_CODES.invalidProof);
+		}
+
+		const newAccount = current.identity === RESOLUTION_OUTCOMES.created;
+		const newMembership =
+			current.membership === MEMBERSHIP_OUTCOMES.existing
+				? undefined
+				: current.membership;
+
+		if (newAccount || newMembership !== undefined) {
+			const registered = await evaluatePolicy(
+				subjectId,
+				(subject) =>
+					registration({
+						tenant,
+						account: accountId,
+						subject,
+						proof: latest,
+						proofs,
+						newAccount,
+						newMembership,
+						emailOwnedByAnotherAccount: current.emailOwnedByAnotherAccount,
+					}),
+				{ audit, tenant, stepUpAllowed: false, name: "registration" },
+			);
+
+			if (registered.kind !== DECISION_KINDS.allow) {
+				return fail(ERROR_CODES.noAllow);
+			}
 		}
 
 		const decision = await evaluatePolicy(
 			subjectId,
-			(subject) => policy({ subject, tenant, proof: latest, proofs }),
-			{ audit, tenant, stepUpAllowed: stepUpDuration !== undefined },
+			(subject) =>
+				policy({ subject, tenant, account: accountId, proof: latest, proofs }),
+			{
+				audit,
+				tenant,
+				stepUpAllowed: stepUpDuration !== undefined,
+				name: "sign-in",
+			},
 		);
 
 		if (decision.kind === DECISION_KINDS.stepUp) {
@@ -237,12 +308,10 @@ export function createSignIn(options: SignInOptions): SignIn {
 				payload: {
 					tenant,
 					device,
-					subject: subjectId,
+					account: accountId,
+					identity: current.identity,
 					factor: decision.factor,
 					proofs: JSON.stringify(proofs.map(serializeProof)),
-					identity: progress.outcome,
-					evicted: JSON.stringify(progress.evicted),
-					...(progress.email === undefined ? {} : { email: progress.email }),
 				},
 				timeToLive: stepUpDuration,
 			});
@@ -252,6 +321,19 @@ export function createSignIn(options: SignInOptions): SignIn {
 				factor: decision.factor,
 				continuation,
 			});
+		}
+
+		if (decision.kind !== DECISION_KINDS.allow) {
+			return fail(ERROR_CODES.noAllow);
+		}
+
+		const applied = await applyPlan(
+			{ store: accounts, sessionTokens, trustedProviders, audit },
+			current,
+		);
+
+		if (!applied.ok) {
+			return fail(applied.error);
 		}
 
 		const session = issueSession(decision);
@@ -274,28 +356,30 @@ export function createSignIn(options: SignInOptions): SignIn {
 		return succeed({
 			token: token.value,
 			tenant,
+			account: accountId,
 			subject: subjectId,
 			device,
 			session: session.value.id,
-			identity: progress.outcome,
-			email: progress.email,
-			evicted: progress.evicted,
+			identity: current.identity,
+			membership: current.membership,
+			email: first.claims.email?.address,
+			evicted: applied.value,
 		});
 	};
 
 	const refuseContinuation = async (
 		reason: string,
 		tenant: string,
-		subject: string,
 		factor: string,
+		account: string,
 	): Promise<Result<SignedIn, SignInRefusal>> => {
 		await report(audit, {
 			event: AUDIT_EVENTS.signInContinue,
 			outcome: AUDIT_OUTCOMES.refusal,
 			reason,
 			tenant,
-			subject,
-			detail: { factor },
+			subject: "",
+			detail: { factor, account },
 		});
 
 		return fail(ERROR_CODES.invalidProof);
@@ -315,40 +399,13 @@ export function createSignIn(options: SignInOptions): SignIn {
 			return fail(proof.error);
 		}
 
-		const resolution = await resolveIdentity(identities, tenant, proof.value, {
-			audit,
-		});
+		const planned = await plan(tenant, proof.value);
 
-		if (!resolution.ok) {
-			return fail(resolution.error);
+		if (!planned.ok) {
+			return fail(planned.error);
 		}
 
-		const { subjectId, outcome } = resolution.value;
-
-		let evicted: readonly string[] = [];
-
-		if (proof.value.claims.emailVerified) {
-			const confirmed = await mutateIdentity(tenant, subjectId, {
-				type: "confirm-email",
-				proof: proof.value,
-			});
-
-			if (!confirmed.ok) {
-				return fail(confirmed.error);
-			}
-
-			evicted = confirmed.value.affectedSubjects;
-		}
-
-		return conclude({
-			tenant,
-			device,
-			subjectId,
-			proofs: [proof.value],
-			outcome,
-			email: proof.value.claims.email?.address,
-			evicted,
-		});
+		return conclude({ device, plan: planned.value, proofs: [proof.value] });
 	};
 
 	const secondStep = async (
@@ -364,62 +421,85 @@ export function createSignIn(options: SignInOptions): SignIn {
 		}
 
 		const held = spent.value;
-		const subject = own(held, "subject") ?? "";
+		const account = own(held, "account") ?? "";
 		const earlier = parseProofs(own(held, "proofs"));
 		const outcome = OUTCOMES.find(
 			(candidate) => candidate === own(held, "identity"),
 		);
-		const evicted = parseEvicted(own(held, "evicted"));
+		const first = earlier?.[0];
 
 		if (
 			own(held, "tenant") !== tenant ||
 			own(held, "device") !== device ||
 			own(held, "factor") !== factor.id ||
-			!isNonEmptyString(subject) ||
+			!isNonEmptyString(account) ||
 			earlier === undefined ||
-			outcome === undefined ||
-			evicted === undefined
+			first === undefined ||
+			outcome === undefined
 		) {
 			return refuseContinuation(
 				AUDIT_REASONS.forbidden,
 				tenant,
-				subject,
 				factor.id,
+				account,
 			);
 		}
 
 		const proof = await verifyProof(factor, request.response, {
 			audit,
-			context: { tenant, subject, proofs: earlier },
+			context: { tenant, account, proofs: earlier },
 		});
 
 		if (!proof.ok) {
 			return fail(proof.error);
 		}
 
-		const owner = await identities.findSubject(
-			tenant,
-			proof.value.claims.provider,
-			proof.value.claims.externalId,
-		);
+		const claims = proof.value.claims;
 
-		if (owner !== subject) {
+		if (!earlier.some((previous) => sameClaims(previous.claims, claims))) {
+			const owned = await accounts.findIdentity(
+				claims.provider,
+				claims.externalId,
+			);
+
+			if (
+				owned === undefined ||
+				owned.accountId !== account ||
+				(await records.checkIdentity(owned)) === "invalid"
+			) {
+				return refuseContinuation(
+					AUDIT_REASONS.notOwner,
+					tenant,
+					factor.id,
+					account,
+				);
+			}
+		}
+
+		const planned = await plan(tenant, first);
+
+		if (!planned.ok) {
+			return fail(planned.error);
+		}
+
+		const sameAccount =
+			outcome === RESOLUTION_OUTCOMES.created
+				? planned.value.identity === RESOLUTION_OUTCOMES.created
+				: planned.value.accountId === account;
+
+		if (!sameAccount) {
 			return refuseContinuation(
-				AUDIT_REASONS.notOwner,
+				AUDIT_REASONS.conflict,
 				tenant,
-				subject,
 				factor.id,
+				account,
 			);
 		}
 
 		return conclude({
-			tenant,
 			device,
-			subjectId: subject,
+			plan: planned.value,
 			proofs: [...earlier, proof.value],
-			outcome,
-			email: own(held, "email"),
-			evicted,
 		});
 	};
 
