@@ -30,6 +30,8 @@ const NEW_SECRET: SecretVersion = {
 	value: "accounts-secret-2-ABCDEFGHIJKLMNOPQRST",
 };
 
+const SMS_CODE = "777777";
+
 const textOf = (response: unknown, key: string): string =>
 	typeof response === "object" && response !== null
 		? String(Reflect.get(response, key) ?? "")
@@ -67,6 +69,26 @@ const watch = (store: AccountStore) => {
 
 	return { store: watched, writes };
 };
+
+/** A factor that repeats who the first proof named when the code is right, as TOTP does. */
+const repeating = (good: string, provider: string) =>
+	factorPluginOf(
+		async (response, context) => {
+			const first = context.proofs[0];
+
+			return textOf(response, "code") === good && first
+				? succeed({
+						provider: first.claims.provider,
+						externalId: first.claims.externalId,
+						emailVerified: first.claims.emailVerified,
+						...(first.claims.email === undefined
+							? {}
+							: { email: first.claims.email.address }),
+					})
+				: fail("invalid-proof");
+		},
+		{ providers: [provider] },
+	);
 
 type Options = {
 	readonly registration?: (input: RegistrationPolicyInput) => unknown;
@@ -119,23 +141,8 @@ const createFixture = async (options: Options = {}) => {
 					}),
 				{ providers: ["password"] },
 			),
-			code: factorPluginOf(
-				async (response, context) => {
-					const first = context.proofs[0];
-
-					return textOf(response, "code") === GOOD_CODE && first
-						? succeed({
-								provider: first.claims.provider,
-								externalId: first.claims.externalId,
-								emailVerified: first.claims.emailVerified,
-								...(first.claims.email === undefined
-									? {}
-									: { email: first.claims.email.address }),
-							})
-						: fail("invalid-proof");
-				},
-				{ providers: ["code"] },
-			),
+			code: repeating(GOOD_CODE, "code"),
+			sms: repeating(SMS_CODE, "sms"),
 		},
 		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
 		tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
@@ -859,4 +866,39 @@ test("registration is required, and a trusted provider must be one a factor clai
 		RangeError,
 	);
 	expect(vi.isMockFunction(options.policy)).toBe(false);
+});
+
+test("a policy may ask for as many factors as it likes, each one once, and the session records them all", async () => {
+	const { auth } = await createFixture({
+		policy: (input) => {
+			const passed = input.proofs.map((proof) => proof.factor);
+
+			if (!passed.includes("code")) {
+				return requireFactor("code");
+			}
+
+			return passed.includes("sms") ? "allow" : requireFactor("sms");
+		},
+	});
+	const step = (factor: string, response: unknown, continuation?: string) =>
+		auth.signIn({
+			tenant: "acme",
+			device: "laptop",
+			factor,
+			response,
+			...(continuation === undefined ? {} : { continuation }),
+		});
+
+	const second = stepUpOf(await step("email", { email: "ivan@example.com" }));
+	const third = stepUpOf(await step("code", { code: GOOD_CODE }, second));
+	const done = await step("sms", { code: SMS_CODE }, third);
+
+	if (!done.ok) {
+		throw new Error("three factors must sign in");
+	}
+
+	expect(await auth.sessions.verify(done.value.token)).toMatchObject({
+		ok: true,
+		value: { methods: ["email", "code", "sms"] },
+	});
 });
