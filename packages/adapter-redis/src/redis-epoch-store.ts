@@ -32,7 +32,7 @@ return stamp`;
  * Redis is full with `noeviction`, reads still work and sessions can still be
  * issued, but a revocation cannot be written; a dedicated instance holds only
  * revocations, whose number is bounded by the token life time, so nothing else
- * can starve it. Watch it with `createRedisInstanceStats`.
+ * can starve it. Watch its memory with the monitoring of the deployment.
  *
  * The deployment must keep revocations: `maxmemory-policy noeviction`, because
  * evicting a revocation revives its tokens, and persistence with AOF; with

@@ -1,43 +1,11 @@
 import {
 	createRedisEpochStore,
-	createRedisInstanceStats,
 	createRedisMeterStore,
 } from "@vow-auth/adapter-redis";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createConnection } from "./resp-connection.js";
 
-const normalUrl = process.env.VOW_AUTH_REDIS_URL;
 const fullUrl = process.env.VOW_AUTH_REDIS_FULL_URL;
-
-describe.runIf(normalUrl !== undefined)("the numbers of a live Redis", () => {
-	let connection: Awaited<ReturnType<typeof createConnection>>;
-
-	beforeAll(async () => {
-		connection = await createConnection(normalUrl ?? "");
-	});
-
-	afterAll(() => {
-		connection.close();
-	});
-
-	test("the instance stats read the real numbers", async () => {
-		const stats = await createRedisInstanceStats({
-			run: (script, keys, args) =>
-				connection.command(
-					"EVAL",
-					script,
-					String(keys.length),
-					...keys,
-					...args,
-				),
-		}).stats();
-
-		expect(stats.usedBytes).toBeGreaterThan(0);
-		expect(stats.entries).toBe(await connection.command("DBSIZE"));
-		expect(stats.evictions).toBe(0);
-		expect(typeof stats.capacityRefusals).toBe("number");
-	});
-});
 
 describe.runIf(fullUrl !== undefined)(
 	"a Redis that has run out of memory (maxmemory with noeviction)",
@@ -79,15 +47,6 @@ describe.runIf(fullUrl !== undefined)(
 			await expect(
 				meter.consume({ key, cost: 1, limit: 1, windowMilliseconds: 60_000 }),
 			).rejects.toThrow(/OOM/);
-		});
-
-		test("the stats still answer and show the refused writes", async () => {
-			const stats = await createRedisInstanceStats({ run }).stats();
-
-			expect(stats.capacityRefusals).toBeGreaterThan(0);
-			expect(stats.maximumBytes).toBeGreaterThan(0);
-			expect(stats.usedBytes).toBeGreaterThan(stats.maximumBytes ?? 0);
-			expect(stats.evictions).toBe(0);
 		});
 	},
 );
