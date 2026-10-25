@@ -159,3 +159,49 @@ test("a malformed value or an unknown version never reaches the cryptography", a
 		deriveKey.mockRestore();
 	}
 });
+
+test("a secret that does not look generated, or repeats another version, stops the start", () => {
+	for (const value of [
+		"a".repeat(32),
+		"ab".repeat(16),
+		"0123456789abcdef".repeat(2),
+		"changeme-changeme-changeme-change",
+		"password-password-password-password",
+	]) {
+		expect(
+			() => createSealer({ secrets: [{ version: 1, value }] }),
+			value,
+		).toThrow(RangeError);
+	}
+
+	expect(() =>
+		createSealer({
+			secrets: [
+				{ version: 2, value: firstSecret.value },
+				{ version: 1, value: firstSecret.value },
+			],
+		}),
+	).toThrow(RangeError);
+
+	for (const generated of [
+		"q2Vb7kq3XnR9sT1uWz4yA0cE6gI8mO+PdLfHjNrVxZw=",
+		"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+	]) {
+		expect(() =>
+			createSealer({ secrets: [{ version: 1, value: generated }] }),
+		).not.toThrow();
+	}
+});
+
+test("the domain and the purpose cannot be shifted into each other", async () => {
+	const secrets = [firstSecret];
+	const sealed = await createSealer({ secrets, domain: "factor:x" }).seal({
+		purpose: "y/p",
+		payload: { forged: "1" },
+		timeToLive: durationOf(60_000),
+	});
+
+	expect(
+		await createSealer({ secrets, domain: "factor:x/y" }).unseal(sealed, "p"),
+	).toEqual({ ok: false, error: "invalid-seal" });
+});

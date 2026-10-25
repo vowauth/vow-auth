@@ -99,6 +99,8 @@ const parseContents = (raw: unknown): SealedContents | undefined => {
 };
 
 const MINIMUM_SECRET_LENGTH = 32;
+const MINIMUM_SECRET_BITS = 128;
+const MINIMUM_DISTINCT_CHARACTERS = 16;
 const SALT_BYTES = 16;
 const INITIALIZATION_VECTOR_BYTES = 12;
 const MAXIMUM_VERSION_DIGITS = 9;
@@ -169,7 +171,9 @@ const deriveMessageKey = (
 			name: "HKDF",
 			hash: "SHA-256",
 			salt,
-			info: encoder.encode(`${KEY_DERIVATION_LABEL}${domain}/${purpose}`),
+			info: encoder.encode(
+				KEY_DERIVATION_LABEL + JSON.stringify([domain, purpose]),
+			),
 		},
 		secretKey,
 		{ name: "AES-GCM", length: 256 },
@@ -184,6 +188,46 @@ const importSecret = (value: string): Promise<CryptoKey> => {
 	]);
 };
 
+/**
+ * Whether a secret looks generated rather than typed: enough distinct
+ * characters, no repetition of a shorter part, and at least 128 bits by the
+ * frequency of its own characters. It catches `aaaa…`, `abab…`, `0123…` and
+ * placeholders; a secret from `openssl rand -base64 32` always passes.
+ */
+const looksRandom = (value: string): boolean => {
+	const characters = [...value];
+	const counts = new Map<string, number>();
+
+	for (const character of characters) {
+		counts.set(character, (counts.get(character) ?? 0) + 1);
+	}
+
+	let bitsPerCharacter = 0;
+
+	for (const count of counts.values()) {
+		const share = count / characters.length;
+
+		bitsPerCharacter -= share * Math.log2(share);
+	}
+
+	const periodic = Array.from(
+		{ length: Math.floor(characters.length / 2) },
+		(_, index) => index + 1,
+	).some(
+		(period) =>
+			characters.length % period === 0 &&
+			characters.every(
+				(character, index) => character === characters[index % period],
+			),
+	);
+
+	return (
+		counts.size >= MINIMUM_DISTINCT_CHARACTERS &&
+		!periodic &&
+		bitsPerCharacter * characters.length >= MINIMUM_SECRET_BITS
+	);
+};
+
 const requireValidSecrets = (
 	secrets: readonly SecretVersion[],
 ): SecretVersion => {
@@ -194,6 +238,7 @@ const requireValidSecrets = (
 	}
 
 	const versions = new Set<number>();
+	const values = new Set<string>();
 
 	for (const secret of secrets) {
 		if (!Number.isSafeInteger(secret.version) || secret.version < 0) {
@@ -210,7 +255,20 @@ const requireValidSecrets = (
 			);
 		}
 
+		if (!looksRandom(secret.value)) {
+			throw new RangeError(
+				`Secret version ${secret.version} does not look random; generate one with \`openssl rand -base64 32\``,
+			);
+		}
+
+		if (values.has(secret.value)) {
+			throw new RangeError(
+				`Secret version ${secret.version} repeats the value of another version`,
+			);
+		}
+
 		versions.add(secret.version);
+		values.add(secret.value);
 	}
 
 	return current;

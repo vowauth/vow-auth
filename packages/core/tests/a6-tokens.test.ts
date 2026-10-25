@@ -215,3 +215,17 @@ test("inherited properties never replace missing options", async () => {
 		Reflect.deleteProperty(Object.prototype, "payload");
 	}
 });
+
+test("the domain and the purpose of a token cannot be shifted into each other", async () => {
+	const store = createMapTokenStore();
+	const token = await createTokens({ store, domain: "factor:x" }).issue({
+		purpose: "y/p",
+		payload: { forged: "1" },
+		timeToLive: durationOf(60_000),
+	});
+
+	expect(
+		(await createTokens({ store, domain: "factor:x/y" }).consume(token, "p"))
+			.ok,
+	).toBe(false);
+});

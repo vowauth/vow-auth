@@ -33,6 +33,7 @@ import type { TokenStore } from "./tokens/token-store.js";
 import { createTokens } from "./tokens/tokens.js";
 
 const DEVICE_LIFE_TIME_MILLISECONDS = 400 * 24 * 60 * 60 * 1_000;
+const FACTOR_ID = /^[a-z][a-z0-9-]{0,62}$/;
 
 /** The factors of an engine by id, as plugins. */
 export type AuthFactors = Readonly<Record<string, FactorPlugin<unknown>>>;
@@ -140,9 +141,9 @@ const registerFactors = (
 	const apis: Record<string, unknown> = {};
 
 	for (const [id, plugin] of Object.entries(plugins)) {
-		if (!isStorableText(id)) {
+		if (!FACTOR_ID.test(id)) {
 			throw new RangeError(
-				`The factor id ${JSON.stringify(id)} cannot be stored`,
+				`The factor id ${JSON.stringify(id)} must be lower-case letters, digits and dashes, starting with a letter`,
 			);
 		}
 

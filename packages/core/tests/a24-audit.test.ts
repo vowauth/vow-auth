@@ -338,7 +338,7 @@ test("a store that returns an expired record gets the reason expired", async () 
 		store: {
 			put: async () => undefined,
 			take: async () => ({
-				purpose: "core/email-link",
+				purpose: JSON.stringify(["core", "email-link"]),
 				payload: {},
 				expiresAtMilliseconds: 500,
 			}),

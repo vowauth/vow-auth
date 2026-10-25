@@ -60,7 +60,7 @@ export type Tokens = {
 export function createTokens(options: TokensOptions): Tokens {
 	const audit = own(options, "audit");
 	const domain = own(options, "domain") ?? "core";
-	const stored = (purpose: string): string => `${domain}/${purpose}`;
+	const stored = (purpose: string): string => JSON.stringify([domain, purpose]);
 
 	const record = (
 		event: string,

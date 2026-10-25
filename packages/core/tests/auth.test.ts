@@ -483,3 +483,12 @@ test("a second factor may repeat who the first one proved, and may not name anyo
 			.map((record) => record.reason),
 	).toEqual(["verified", "foreign-provider", "verified", "foreign-provider"]);
 });
+
+test("a factor id is a plain name, so it cannot be shaped into another domain", () => {
+	for (const id of ["Email", "x/y", "a b", "1factor", "", "-x"]) {
+		expect(
+			() => createAuth(optionsWith(quiet, { [id]: emailFactor })),
+			id,
+		).toThrow(RangeError);
+	}
+});
