@@ -23,7 +23,7 @@ const file = ts.createSourceFile(
 );
 const comments = new Map();
 const DIRECTIVE =
-	/^(?:@ts-|biome-ignore|eslint-|eslint |prettier-ignore|istanbul |c8 |v8 |@vite-ignore|webpack[A-Z]|[@#]__PURE__|[@#]__NO_SIDE_EFFECTS__|@jsx|@license|@preserve|#region|#endregion|<reference )/;
+	/^(?:@ts-|biome-ignore|nosemgrep|ruleid:|ok:|eslint-|eslint |prettier-ignore|istanbul |c8 |v8 |@vite-ignore|webpack[A-Z]|[@#]__PURE__|[@#]__NO_SIDE_EFFECTS__|@jsx|@license|@preserve|#region|#endregion|<reference )/;
 
 const isKept = (text) => {
 	if (text.startsWith("/**") && text.length > 4) {

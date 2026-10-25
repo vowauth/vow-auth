@@ -1,0 +1,97 @@
+rules:
+  - id: no-math-random
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: Math.random is predictable; take randomness from crypto.getRandomValues.
+    pattern: Math.random()
+
+  - id: no-dynamic-code
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: Code built from text at run time can run what an attacker sends.
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+      - pattern: setTimeout("...", ...)
+      - pattern: setInterval("...", ...)
+
+  - id: runs-anywhere
+    languages: [typescript]
+    severity: ERROR
+    message: The packages run in every runtime; a Node built-in belongs to the application, passed in as a function.
+    pattern-either:
+      - pattern: import $X from "=~/^node:/"
+      - pattern: import { $X } from "=~/^node:/"
+      - pattern: import * as $X from "=~/^node:/"
+      - pattern: require("=~/^node:/")
+
+  - id: no-internal-entry
+    languages: [typescript]
+    severity: ERROR
+    message: The internal entry of the core is for its own tests; a package that ships uses the public API.
+    patterns:
+      - pattern-either:
+          - pattern: import { $X } from "$MODULE"
+          - pattern: import $X from "$MODULE"
+          - pattern: import * as $X from "$MODULE"
+      - metavariable-regex:
+          metavariable: $MODULE
+          regex: (.*/core/src/internal|@vow-auth/core/internal)
+
+  - id: extractable-key
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: Keys stay inside Web Crypto; import or generate them as non-extractable.
+    pattern-either:
+      - pattern: crypto.subtle.importKey($F, $K, $A, true, $U)
+      - pattern: crypto.subtle.generateKey($A, true, $U)
+      - pattern: crypto.subtle.deriveKey($A, $B, $C, true, $U)
+
+  - id: weak-hash
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: SHA-1 and MD5 are broken for collision resistance; only TOTP may use HMAC-SHA-1, as RFC 6238 does.
+    pattern-either:
+      - pattern: crypto.subtle.digest("SHA-1", ...)
+      - pattern: crypto.subtle.digest("MD5", ...)
+      - pattern: |
+          { ..., hash: "SHA-1", ... }
+    paths:
+      exclude: [packages/factor-totp/src/otp.ts]
+
+  - id: secret-compared-in-variable-time
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: Comparing a secret with === takes time that depends on where it differs; compare in constant time.
+    patterns:
+      - pattern-either:
+          - pattern: $A === $B
+          - pattern: $A !== $B
+      - metavariable-regex:
+          metavariable: $A
+          regex: (?i)^[a-z.]*(secret|mac|seal|signature|digest|tag)$
+      - pattern-not: $A === undefined
+      - pattern-not: $A !== undefined
+      - pattern-not: $A === null
+      - pattern-not: $A !== null
+
+  - id: statement-built-from-values
+    languages: [typescript]
+    severity: ERROR
+    message: A statement or script must not be built from values; pass them as parameters. Only constants in upper case may be interpolated.
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: |
+                  const $NAME = `...${$X}...`;
+              - metavariable-regex:
+                  metavariable: $NAME
+                  regex: ^[A-Z][A-Z0-9_]*$
+          - patterns:
+              - pattern: $RUN(`...${$X}...`, ...)
+              - metavariable-regex:
+                  metavariable: $RUN
+                  regex: ^(.*\.)?(run|query|execute|eval|evalsha)$
+      - metavariable-regex:
+          metavariable: $X
+          regex: ^(?![A-Z][A-Z0-9_]*(\.join\("[^"]*"\))?$)

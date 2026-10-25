@@ -1,0 +1,4 @@
+packages/*/tests/
+packages/*/dist/
+node_modules/
+semgrep/

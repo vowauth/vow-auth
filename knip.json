@@ -3,7 +3,8 @@
 	"tags": ["-lintignore"],
 	"workspaces": {
 		".": {
-			"entry": ["scripts/*.mjs"]
+			"entry": ["scripts/*.mjs"],
+			"ignore": ["semgrep/**"]
 		},
 		"packages/*": {
 			"entry": ["tests/**/*.test.ts"]
