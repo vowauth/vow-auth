@@ -7,8 +7,8 @@ import { fromBase64Url, toBase64Url } from "./shared/base64-url.js";
 
 const RECORD_KEY_LABEL = "vow-auth/record/v1/";
 
-/** One field of a sealed record, in the order the record kind fixes. */
-export type RecordField = string | boolean | null;
+/** One field of a sealed record, in the order the record kind fixes; a number is a safe integer. */
+export type RecordField = string | number | boolean | null;
 
 /**
  * What a seal says about a record: it matches the fields under the newest

@@ -1,8 +1,4 @@
 export {
-	createRedisEpochStore,
-	type RedisEpochStoreOptions,
-} from "./redis-epoch-store.js";
-export {
 	createRedisMeterStore,
 	type RedisMeterStoreOptions,
 } from "./redis-meter-store.js";

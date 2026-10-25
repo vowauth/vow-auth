@@ -6,31 +6,34 @@ import {
 	report,
 } from "../audit.js";
 import { ERROR_CODES } from "../errors.js";
+import type { RevocationLevel } from "../grants/grant-store.js";
 import { fail, type Result, succeed } from "../result.js";
-import {
-	REVOCATION_SCOPES,
-	type SessionTokens,
-} from "../session-tokens/session-tokens.js";
 import type { AccountStore } from "./account-store.js";
 import type { SignInPlan } from "./plan.js";
 
 /** What applying a plan needs. */
 export type ApplyOptions = {
 	readonly store: AccountStore;
-	readonly sessionTokens: Pick<SessionTokens, "revoke">;
+	/** Revokes a level of grants; the change that asks records itself. */
+	readonly revoke: (level: RevocationLevel) => Promise<void>;
 	readonly trustedProviders: readonly string[];
 	readonly audit?: AuditSink | undefined;
 };
 
-/** Revokes the sessions of an account in every tenant it is a member of. */
+/**
+ * Revokes every grant of an account: its sessions with everything under
+ * them, and in every tenant it is a member of, its entries and agents.
+ */
 export const revokeAccount = async (
-	options: Pick<ApplyOptions, "store" | "sessionTokens">,
+	options: Pick<ApplyOptions, "store" | "revoke">,
 	accountId: string,
 ): Promise<void> => {
+	await options.revoke({ scope: "account", id: accountId });
+
 	for (const membership of await options.store.listMemberships(accountId)) {
-		await options.sessionTokens.revoke({
+		await options.revoke({
+			scope: "subject",
 			tenant: membership.tenant,
-			scope: REVOCATION_SCOPES.user,
 			id: membership.subjectId,
 		});
 	}
@@ -46,10 +49,10 @@ export const revokeAccount = async (
  * and sealing records again under the newest secret are compare-and-set; one
  * that lost a race is skipped, as the row is fresher already.
  *
- * An eviction narrows access, so the sessions of the claimants are revoked
- * before their claims are removed, and the sessions of any claimant that
- * appeared in between right after: a failure half way leaves sessions
- * revoked and claims in place, never a live session of an evicted account.
+ * An eviction narrows access, so the grants of the claimants are revoked
+ * before their claims are removed, and the grants of any claimant that
+ * appeared in between right after: a failure half way leaves grants revoked
+ * and claims in place, never a live session of an evicted account.
  * It answers the accounts the eviction touched.
  */
 export async function applyPlan(

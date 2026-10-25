@@ -1,5 +1,5 @@
 import {
-	createMemoryEpochStore,
+	createMemoryGrantStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
 import {
@@ -8,11 +8,13 @@ import {
 	type AuditRecord,
 	type AuditSink,
 	applyPlan,
-	createSealer,
-	createSessionTokens,
+	createGrants,
+	createRecordSeal,
+	createRecords,
 	createTokens,
 	evaluatePolicy,
 	type Factor,
+	type GrantStore,
 	issueSession,
 	planSignIn,
 	type Result,
@@ -80,16 +82,39 @@ const proofOf = async (claims: unknown) => {
 	return result.value;
 };
 
-const createSessions = (audit?: AuditSink) => {
-	const sealer = createSealer({ secrets: [{ version: 1, value: SECRET }] });
-	const sessionTokens = createSessionTokens({
-		sealer,
-		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
-		maximumLifeTimeMilliseconds: LIFE_TIME,
+const sha256 = async (text: string): Promise<string> =>
+	Array.from(
+		new Uint8Array(
+			await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)),
+		),
+		(byte) => byte.toString(16).padStart(2, "0"),
+	).join("");
+
+const createSessions = (
+	audit?: AuditSink,
+	store: GrantStore = createMemoryGrantStore(),
+	maximumMilliseconds = LIFE_TIME,
+) => {
+	const records = createRecords(
+		createRecordSeal({ secrets: [{ version: 1, value: SECRET }] }),
+	);
+	const grants = createGrants({
+		store,
+		records,
+		idleMilliseconds: maximumMilliseconds,
+		maximumMilliseconds,
 		...(audit === undefined ? {} : { audit }),
 	});
+	const issue = async (subject: string) =>
+		grants.issue(await bornSession(subject), {
+			accountId: `acc_${subject}`,
+			tenant: "acme",
+			subjectId: subject,
+			device: "laptop",
+			proofs: [await proofOf(validClaims)],
+		});
 
-	return { sealer, sessionTokens };
+	return { grants, issue, records, store };
 };
 
 const bornSession = async (subject: string) => {
@@ -185,10 +210,7 @@ const signInOf = async (
 		return;
 	}
 
-	await applyPlan(
-		{ ...options, sessionTokens: createSessions().sessionTokens },
-		plan.value,
-	);
+	await applyPlan({ ...options, revoke: async () => undefined }, plan.value);
 };
 
 test("identity resolution is recorded for every outcome and refusal", async () => {
@@ -267,101 +289,106 @@ test("a token refusal is generic to the caller and exact in the audit", async ()
 	).toBe(true);
 });
 
-test("session tokens record issue, refusals with their reason, and revocation", async () => {
+test("sessions record issue, refusals with their reason, and revocation", async () => {
 	const { records, sink } = createCollector();
-	const { sealer, sessionTokens } = createSessions(sink);
-	const session = await bornSession("alice");
-	const issued = await sessionTokens.issue(session, {
-		tenant: "acme",
-		device: "laptop",
-		timeToLive: durationOf(LIFE_TIME),
-		methods: ["test"],
-	});
+	const { grants, issue } = createSessions(sink);
+	const issued = await issue("alice");
 
 	if (!issued.ok) {
 		throw new Error("the token must be issued");
 	}
 
-	expect((await sessionTokens.verify(issued.value)).ok).toBe(true);
+	expect((await grants.verify(issued.value, "acme")).ok).toBe(true);
 	expect(summary(records)).toEqual(["session.issue:success:issued"]);
 
-	await sessionTokens.verify("1.garbage");
-	await sessionTokens.verify(
-		await sealer.seal({
-			purpose: "session",
-			payload: { chain: "[]", expiresAtMilliseconds: "9999999" },
-			timeToLive: durationOf(LIFE_TIME),
-		}),
-	);
-	await sessionTokens.revoke({
-		tenant: "acme",
-		scope: "device",
-		id: "laptop",
-	});
-	await sessionTokens.verify(issued.value);
+	await grants.verify("1.garbage", "acme");
+	await grants.verify(`vas_${"0".repeat(64)}`, "acme");
+	await grants.revoke({ scope: "device", id: "laptop" });
+	await grants.verify(issued.value, "acme");
 
 	expect(summary(records)).toEqual([
 		"session.issue:success:issued",
-		"session.verify:refusal:invalid-seal",
-		"session.verify:refusal:malformed-chain",
+		"session.verify:refusal:malformed",
+		"session.verify:refusal:not-found",
 		"session.revoke:success:revoked",
 		"session.verify:refusal:revoked",
 	]);
 	expect(records[0]).toMatchObject({
 		tenant: "acme",
 		subject: "alice",
-		detail: { device: "laptop", session: session.id },
+		detail: { account: "acc_alice", device: "laptop" },
 	});
 	expect(records[3]).toMatchObject({
-		tenant: "acme",
-		detail: { scope: "device", id: "laptop" },
+		detail: { scope: "device", id: "laptop", grants: "2" },
 	});
 	expect(records[4]).toMatchObject({
 		tenant: "acme",
-		subject: "alice",
-		detail: { device: "laptop", scope: "device" },
+		detail: { scope: "session" },
 	});
 });
 
-test("an expired session token is told apart from a forged one when the sealer reports too", async () => {
+test("an expired session, an unknown token and a grant written past the engine are told apart in the audit", async () => {
 	const { records, sink } = createCollector();
-	const sealer = createSealer({
-		secrets: [{ version: 1, value: SECRET }],
-		audit: sink,
-	});
-	const sessionTokens = createSessionTokens({
-		sealer,
-		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
-		maximumLifeTimeMilliseconds: LIFE_TIME,
-		audit: sink,
-	});
-	const issued = await sessionTokens.issue(await bornSession("alice"), {
-		tenant: "acme",
-		device: "laptop",
-		timeToLive: durationOf(1_000),
-		methods: ["test"],
-	});
+	const store = createMemoryGrantStore();
+	const { grants, issue } = createSessions(sink, store, 1_000);
+	const issued = await issue("alice");
 
 	if (!issued.ok) {
 		throw new Error("the token must be issued");
 	}
 
+	const forged = `vas_${"f".repeat(64)}`;
+
+	await store.createSession(
+		{
+			id: "forged",
+			kind: "session",
+			tokenHash: await sha256(forged),
+			accountId: "acc_mallory",
+			tenant: undefined,
+			subjectId: undefined,
+			device: "laptop",
+			agent: undefined,
+			parentId: undefined,
+			sessionId: undefined,
+			proofs: "[]",
+			authenticatedAtMilliseconds: Date.now(),
+			expiresAtMilliseconds: Date.now() + LIFE_TIME,
+			idleExpiresAtMilliseconds: undefined,
+			revoked: false,
+			seal: "1.AAAA",
+		},
+		{
+			id: "forged-entry",
+			kind: "tenant",
+			tokenHash: undefined,
+			accountId: "acc_mallory",
+			tenant: "acme",
+			subjectId: "mallory",
+			device: "laptop",
+			agent: undefined,
+			parentId: "forged",
+			sessionId: "forged",
+			proofs: undefined,
+			authenticatedAtMilliseconds: Date.now(),
+			expiresAtMilliseconds: Date.now() + LIFE_TIME,
+			idleExpiresAtMilliseconds: undefined,
+			revoked: false,
+			seal: "1.AAAA",
+		},
+	);
 	records.length = 0;
 	vi.setSystemTime(2_500);
-	await sessionTokens.verify(issued.value);
-	await sessionTokens.verify(`${issued.value.slice(0, -2)}AA`);
-	await sessionTokens.verify("9.abc");
-	await sessionTokens.verify("garbage");
+	await grants.verify(issued.value, "acme");
+	await grants.verify(`${issued.value.slice(0, -2)}00`, "acme");
+	await grants.verify(forged, "acme");
+	await grants.verify("garbage", "acme");
 
 	expect(summary(records)).toEqual([
-		"seal.unseal:refusal:expired",
-		"session.verify:refusal:invalid-seal",
-		"seal.unseal:refusal:undecryptable",
-		"session.verify:refusal:invalid-seal",
-		"seal.unseal:refusal:unknown-version",
-		"session.verify:refusal:invalid-seal",
-		"seal.unseal:refusal:malformed",
-		"session.verify:refusal:invalid-seal",
+		"session.verify:refusal:expired",
+		"session.verify:refusal:not-found",
+		"session.verify:refusal:invalid-record",
+		"session.verify:refusal:malformed",
 	]);
 });
 
@@ -387,7 +414,7 @@ test("a store that returns an expired record gets the reason expired", async () 
 
 test("no record carries a secret", async () => {
 	const { records, sink } = createCollector();
-	const { sessionTokens } = createSessions(sink);
+	const { grants, issue } = createSessions(sink);
 	const tokens = createTokens({
 		store: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 		audit: sink,
@@ -400,23 +427,20 @@ test("no record carries a secret", async () => {
 
 	await tokens.consume(link, "email-link");
 
-	const issued = await sessionTokens.issue(await bornSession("alice"), {
-		tenant: "acme",
-		device: "laptop",
-		timeToLive: durationOf(LIFE_TIME),
-		methods: ["test"],
-	});
+	const issued = await issue("alice");
 
 	if (!issued.ok) {
 		throw new Error("the token must be issued");
 	}
 
-	await sessionTokens.verify(`${issued.value}x`);
+	await grants.verify(`${issued.value}x`, "acme");
+	await grants.verify(issued.value, "acme");
 
 	const serialized = JSON.stringify(records);
 
 	expect(serialized).not.toContain(link);
 	expect(serialized).not.toContain(issued.value);
+	expect(serialized).not.toContain(await sha256(issued.value));
 	expect(serialized).not.toContain(SECRET);
 	expect(serialized).not.toContain("alice@example.com");
 });
@@ -498,16 +522,14 @@ test("a failing sink prevents a link, a token and a session token", async () => 
 		tokens.issue({ purpose: "email-link", timeToLive: durationOf(1_000) }),
 	).rejects.toThrow("the audit store is down");
 
-	const { sessionTokens } = createSessions(failingSink);
+	const failing = createSessions(failingSink);
 
-	await expect(
-		sessionTokens.issue(await bornSession("alice"), {
-			tenant: "acme",
-			device: "laptop",
-			timeToLive: durationOf(LIFE_TIME),
-			methods: ["test"],
-		}),
-	).rejects.toThrow("the audit store is down");
+	await expect(failing.issue("alice")).rejects.toThrow(
+		"the audit store is down",
+	);
+	expect(
+		await failing.store.findSession(`vas_${"0".repeat(64)}`, undefined),
+	).toBeUndefined();
 });
 
 test("a failing sink gives no payload for a redemption and the token stays spent", async () => {
@@ -525,40 +547,25 @@ test("a failing sink gives no payload for a redemption and the token stays spent
 });
 
 test("a failing sink never blocks a revocation, and the caller still learns of it", async () => {
-	const { sealer } = createSessions();
-	const epochs = createMemoryEpochStore({ maximumBytes: 1_000_000 });
-	const quiet = createSessionTokens({
-		sealer,
-		epochs,
-		maximumLifeTimeMilliseconds: LIFE_TIME,
-	});
-	const loud = createSessionTokens({
-		sealer,
-		epochs,
-		maximumLifeTimeMilliseconds: LIFE_TIME,
-		audit: failingSink,
-	});
-	const issued = await quiet.issue(await bornSession("alice"), {
-		tenant: "acme",
-		device: "laptop",
-		timeToLive: durationOf(LIFE_TIME),
-		methods: ["test"],
-	});
+	const store = createMemoryGrantStore();
+	const quiet = createSessions(undefined, store);
+	const loud = createSessions(failingSink, store);
+	const issued = await quiet.issue("alice");
 
 	if (!issued.ok) {
 		throw new Error("the token must be issued");
 	}
 
 	await expect(
-		loud.revoke({ tenant: "acme", scope: "tenant" }),
+		loud.grants.revoke({ scope: "tenant", tenant: "acme" }),
 	).rejects.toThrow("the audit store is down");
-	expect((await quiet.verify(issued.value)).ok).toBe(false);
+	expect((await quiet.grants.verify(issued.value, "acme")).ok).toBe(false);
 });
 
 test("a refusal still reaches the caller as a failure when the sink is down", async () => {
-	const { sessionTokens } = createSessions(failingSink);
+	const { grants } = createSessions(failingSink);
 
-	await expect(sessionTokens.verify("1.garbage")).rejects.toThrow(
+	await expect(grants.verify("1.garbage", "acme")).rejects.toThrow(
 		"the audit store is down",
 	);
 });

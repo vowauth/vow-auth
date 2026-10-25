@@ -1,6 +1,6 @@
 import {
 	createMemoryAccountStore,
-	createMemoryEpochStore,
+	createMemoryGrantStore,
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
@@ -82,7 +82,7 @@ const createFixture = (overrides: Partial<TotpOptions> = {}) => {
 			}),
 		},
 		accounts: createMemoryAccountStore(),
-		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
+		grants: createMemoryGrantStore(),
 		tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 		meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
 		secrets: [{ version: 1, value: "totp-seal-0123456789abcdefghijklmnopq" }],
@@ -319,7 +319,7 @@ test("a step-up with the right code signs in, and the session remembers both fac
 	expect(done.ok && done.value.account).toBe(account);
 
 	const session = done.ok
-		? await auth.sessions.verify(done.value.token)
+		? await auth.sessions.verify(done.value.token, TENANT)
 		: undefined;
 
 	expect(session?.ok && session.value.methods).toEqual(["email", "totp"]);

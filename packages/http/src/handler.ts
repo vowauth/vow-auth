@@ -2,12 +2,13 @@ import {
 	type Auth,
 	applyLimit,
 	assertLimit,
+	type Entered,
 	type Limit,
 	type MeterRefusal,
 	type Result,
-	type RevocationLevel,
 	type SignedIn,
 	type SignInRefusal,
+	type VerifiedSession,
 } from "@vow-auth/core";
 
 /** What a limit is asked about: the request, which route it is, the tenant and the body. */
@@ -64,6 +65,16 @@ export type Mode = {
 		body: Readonly<Record<string, unknown>>,
 	) => Promise<DeviceChoice | undefined>;
 	readonly signedIn: (signedIn: SignedIn, choice: DeviceChoice) => Response;
+	/** What `GET /session` tells the client about its session. */
+	readonly sessionAnswer: (
+		session: VerifiedSession,
+	) => Readonly<Record<string, unknown>>;
+	/** What `POST /enter` tells the client about the tenant it entered. */
+	readonly enteredAnswer: (
+		entered: Entered,
+	) => Readonly<Record<string, unknown>>;
+	/** Whether a sign in ends the session the request carried, as a cookie that is overwritten does. */
+	readonly replacesSession: boolean;
 	/** `Set-Cookie` headers that end a session in the browser. */
 	readonly sessionEnded: () => readonly string[];
 };
@@ -78,6 +89,10 @@ const STATUS_OF_CODE: Readonly<Record<string, number>> = {
 	"invalid-session": 401,
 	"no-allow": 403,
 	forbidden: 403,
+	suspended: 403,
+	"invalid-record": 403,
+	"no-tenant": 404,
+	conflict: 409,
 	"rate-limited": 429,
 	unavailable: 503,
 };
@@ -93,6 +108,7 @@ const ROUTES: readonly {
 	{ pattern: /^\/sign-out$/, method: "POST" },
 	{ pattern: /^\/sign-out\/device$/, method: "POST" },
 	{ pattern: /^\/sign-out\/everywhere$/, method: "POST" },
+	{ pattern: /^\/enter$/, method: "POST" },
 ];
 
 /** Builds the JSON answer every route gives: never cached, never sniffed. */
@@ -248,26 +264,41 @@ export function createHandler(
 
 	const verified = async (request: Request) => {
 		const token = mode.tokenOf(request);
+		const tenant = tenantOf(request);
 
-		return token === undefined ? undefined : auth.sessions.verify(token);
+		return token === undefined || tenant === undefined
+			? undefined
+			: auth.sessions.verify(token, tenant);
 	};
 
-	const revoke = async (
+	const signOut = async (
 		request: Request,
-		levelOf: (session: {
-			tenant: string;
-			subject: string;
-			device: string;
-			session: string;
-		}) => RevocationLevel,
+		level: "session" | "device" | "account",
 	): Promise<Response> => {
-		const current = await verified(request);
+		const token = mode.tokenOf(request);
 
-		if (current?.ok) {
-			await auth.sessions.revoke(levelOf(current.value));
+		if (token !== undefined) {
+			await auth.sessions.end(token, level);
 		}
 
 		return answer(200, { ok: true }, mode.sessionEnded());
+	};
+
+	const enter = async (request: Request): Promise<Response> => {
+		const token = mode.tokenOf(request);
+		const tenant = tenantOf(request);
+
+		if (token === undefined || tenant === undefined) {
+			return refusalAnswer(
+				token === undefined ? "invalid-session" : "invalid-request",
+			);
+		}
+
+		const result = await auth.sessions.enter(token, tenant);
+
+		return result.ok
+			? answer(200, mode.enteredAnswer(result.value))
+			: signInRefusal(result.error, []);
 	};
 
 	const signIn = async (
@@ -313,6 +344,12 @@ export function createHandler(
 		});
 
 		if (result.ok) {
+			const previous = mode.tokenOf(request);
+
+			if (mode.replacesSession && previous !== undefined) {
+				await auth.sessions.end(previous);
+			}
+
 			return mode.signedIn(result.value, choice);
 		}
 
@@ -423,7 +460,7 @@ export function createHandler(
 			const current = await verified(request);
 
 			return current?.ok
-				? answer(200, current.value)
+				? answer(200, mode.sessionAnswer(current.value))
 				: answer(401, { error: "invalid-session" }, mode.sessionEnded());
 		}
 
@@ -447,25 +484,18 @@ export function createHandler(
 			return challenge(request, target, read.body);
 		}
 
-		if (local === "/sign-out") {
-			return revoke(request, (session) => ({
-				tenant: session.tenant,
-				scope: "session",
-				id: session.session,
-			}));
+		if (local === "/enter") {
+			return enter(request);
 		}
 
-		return local === "/sign-out/device"
-			? revoke(request, (session) => ({
-					tenant: session.tenant,
-					scope: "device",
-					id: session.device,
-				}))
-			: revoke(request, (session) => ({
-					tenant: session.tenant,
-					scope: "user",
-					id: session.subject,
-				}));
+		return signOut(
+			request,
+			local === "/sign-out"
+				? "session"
+				: local === "/sign-out/device"
+					? "device"
+					: "account",
+		);
 	};
 
 	return async (request) => {

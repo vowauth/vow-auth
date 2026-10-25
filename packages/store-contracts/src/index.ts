@@ -3,9 +3,9 @@ export {
 	accountStoreContract,
 } from "./account-store-contract.js";
 export {
-	type EpochStoreContractOptions,
-	epochStoreContract,
-} from "./epoch-store-contract.js";
+	type GrantStoreContractOptions,
+	grantStoreContract,
+} from "./grant-store-contract.js";
 export {
 	type MeterStoreContractOptions,
 	meterStoreContract,

@@ -1,7 +1,4 @@
-import {
-	createRedisEpochStore,
-	createRedisMeterStore,
-} from "@vow-auth/adapter-redis";
+import { createRedisMeterStore } from "@vow-auth/adapter-redis";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createConnection } from "./resp-connection.js";
 
@@ -29,15 +26,6 @@ describe.runIf(fullUrl !== undefined)(
 
 		afterAll(() => {
 			connection.close();
-		});
-
-		test("reads and issuing keep working, a revocation cannot be written", async () => {
-			const epochs = createRedisEpochStore({ run });
-
-			expect((await epochs.read(["{acme}:user:alice"])).stamps).toEqual([0]);
-			await expect(epochs.revoke("{acme}:user:alice", 60_000)).rejects.toThrow(
-				/OOM/,
-			);
 		});
 
 		test("a request that must be counted fails the call and is not let through", async () => {

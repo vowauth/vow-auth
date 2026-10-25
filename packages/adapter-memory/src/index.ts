@@ -1,9 +1,5 @@
 export { createMemoryAccountStore } from "./memory-account-store.js";
-export {
-	createMemoryEpochStore,
-	type MemoryEpochStore,
-	type MemoryEpochStoreOptions,
-} from "./memory-epoch-store.js";
+export { createMemoryGrantStore } from "./memory-grant-store.js";
 export {
 	createMemoryMeterStore,
 	type MemoryMeterStore,

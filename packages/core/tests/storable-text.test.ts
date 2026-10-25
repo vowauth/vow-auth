@@ -1,5 +1,5 @@
 import {
-	createMemoryEpochStore,
+	createMemoryGrantStore,
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
@@ -49,7 +49,7 @@ const createFixture = () => {
 			failing: factorPluginOf(async () => fail("x")),
 		},
 		accounts,
-		epochs: spyOn(createMemoryEpochStore({ maximumBytes: 1_000_000 }), calls),
+		grants: spyOn(createMemoryGrantStore(), calls),
 		tokenStore: spyOn(
 			createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 			calls,
@@ -156,6 +156,7 @@ test("an agent whose name cannot be stored is refused before anything is written
 		fastCheck.asyncProperty(cannotBeStored, async (bad) => {
 			expect(
 				await auth.agents.delegate(signedIn.value.token, {
+					tenant: "acme",
 					agent: bad,
 					timeToLive: durationOf(MINUTE),
 				}),

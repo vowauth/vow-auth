@@ -9,6 +9,8 @@ import { createRecords } from "./accounts/records.js";
 import type { AuditSink } from "./audit.js";
 import { createDevices, type Devices } from "./devices.js";
 import type { FactorPlugin } from "./factor.js";
+import type { GrantStore } from "./grants/grant-store.js";
+import { createGrants, type Grants } from "./grants/grants.js";
 import {
 	createLimiter,
 	type Limiter,
@@ -19,15 +21,11 @@ import type { MeterStore } from "./meter/meter-store.js";
 import { EMAIL_PROVIDER, type Factor } from "./proof.js";
 import { createRecordSeal } from "./record-seal.js";
 import { createSealer, type SecretVersion } from "./sealer.js";
-import type { EpochStore } from "./session-tokens/epoch-store.js";
-import {
-	createSessionTokens,
-	type SessionTokens,
-} from "./session-tokens/session-tokens.js";
 import { isStorableText } from "./shared/is-storable-text.js";
 import { own } from "./shared/own.js";
 import {
-	createSignIn,
+	createSignInFlow,
+	type Enter,
 	type RegistrationPolicyInput,
 	type SignIn,
 	type SignInPolicyInput,
@@ -52,7 +50,8 @@ export type FactorApis<Factors extends AuthFactors> = {
 export type AuthOptions<Factors extends AuthFactors = AuthFactors> = {
 	/** Tenants, accounts, their identities and memberships. */
 	readonly accounts: AccountStore;
-	readonly epochs: EpochStore;
+	/** Sessions, their entries into tenants and agents: the source of truth about access. */
+	readonly grants: GrantStore;
 	readonly tokenStore: TokenStore;
 	readonly meterStore: MeterStore;
 	/**
@@ -76,8 +75,9 @@ export type AuthOptions<Factors extends AuthFactors = AuthFactors> = {
 	 * link to the address itself.
 	 */
 	readonly trustedProviders?: readonly string[] | undefined;
-	/** The longest life time of any session token. */
+	/** How long a session, or any grant, lives at most, whatever happens. */
 	readonly maximumLifeTimeMilliseconds: number;
+	/** How long a session lives without being used; each use moves the end forward, never past the maximum. */
 	readonly sessionTimeToLiveMilliseconds: number;
 	/**
 	 * How long a person has to pass the second factor when the policy asks for
@@ -110,18 +110,25 @@ export type AuthOptions<Factors extends AuthFactors = AuthFactors> = {
 export type Auth<Factors extends AuthFactors = AuthFactors> = {
 	/** The only road to a session. */
 	readonly signIn: SignIn;
-	/** Checks and revokes session tokens; issuing is the sign-in flow's alone. */
-	readonly sessions: Pick<SessionTokens, "verify" | "revoke">;
 	/**
-	 * Agents that act for a person. A person's session token is turned into an
-	 * agent's token with `delegate`; `verify` accepts agent tokens only, and
-	 * `sessions.verify` accepts session tokens only, so an application that
-	 * does not know about agents never takes one for a person. Revoke an agent,
-	 * a delegation, the person, or (for a delegation tied to a session) the
-	 * device or session with `sessions.revoke`.
+	 * Account sessions: `verify` checks a token for a tenant it entered,
+	 * `enter` lets it into another without a new sign in when that tenant's
+	 * policies allow, `end` signs its holder out, `revoke` takes away any
+	 * level of grants. Issuing is the sign-in flow's alone.
 	 */
-	readonly agents: Pick<SessionTokens, "delegate"> & {
-		readonly verify: SessionTokens["verifyAgent"];
+	readonly sessions: Pick<Grants, "verify" | "revoke" | "end"> & {
+		readonly enter: Enter;
+	};
+	/**
+	 * Agents that act for a person in a tenant. A person's session token is
+	 * turned into an agent's token with `delegate`; `verify` accepts agent
+	 * tokens only, and `sessions.verify` accepts session tokens only, so an
+	 * application that does not know about agents never takes one for a
+	 * person. Revoke an agent, a delegation, the subject, or, for a delegation
+	 * tied to a session, the session or the device with `sessions.revoke`.
+	 */
+	readonly agents: Pick<Grants, "delegate"> & {
+		readonly verify: Grants["verifyAgent"];
 	};
 	/** What the application may call on each factor, such as sending a link. */
 	readonly factors: FactorApis<Factors>;
@@ -289,49 +296,53 @@ export function createAuth<const Factors extends AuthFactors>(
 		createLimiter: limiterFor,
 	}));
 
-	const sessionTokens = createSessionTokens({
-		sealer: coreSealer,
-		epochs: options.epochs,
-		maximumLifeTimeMilliseconds: options.maximumLifeTimeMilliseconds,
-		audit,
-	});
-
 	const trustedProviders = requireTrustedProviders(
 		own(options, "trustedProviders"),
 		factors,
 	);
 	const records = createRecords(createRecordSeal({ secrets: options.secrets }));
+	const grants = createGrants({
+		store: options.grants,
+		records,
+		idleMilliseconds: options.sessionTimeToLiveMilliseconds,
+		maximumMilliseconds: options.maximumLifeTimeMilliseconds,
+		audit,
+	});
 	const management = createManagement({
 		store: options.accounts,
 		records,
-		sessionTokens,
-		forget,
+		revoke: grants.revokeQuietly,
+		async forget(account) {
+			await forget(account);
+			await grants.forget(account);
+		},
 		audit,
 	});
 
-	const signIn = createSignIn({
+	const flow = createSignInFlow({
 		factors,
 		accounts: options.accounts,
 		records,
 		trustedProviders,
-		sessionTokens,
+		grants,
 		tokens: createTokens({ store: options.tokenStore, domain: "core", audit }),
 		registration: options.registration,
 		policy: options.policy,
-		sessionTimeToLiveMilliseconds: options.sessionTimeToLiveMilliseconds,
 		stepUpTimeToLiveMilliseconds: options.stepUpTimeToLiveMilliseconds,
 		audit,
 	});
 
 	return {
-		signIn,
+		signIn: flow.signIn,
 		sessions: {
-			verify: sessionTokens.verify,
-			revoke: sessionTokens.revoke,
+			verify: grants.verify,
+			enter: flow.enter,
+			revoke: grants.revoke,
+			end: grants.end,
 		},
 		agents: {
-			delegate: sessionTokens.delegate,
-			verify: sessionTokens.verifyAgent,
+			delegate: grants.delegate,
+			verify: grants.verifyAgent,
 		},
 		factors: apis as FactorApis<Factors>,
 		devices: createDevices({

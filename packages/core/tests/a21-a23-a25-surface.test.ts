@@ -1,6 +1,6 @@
 import {
 	createMemoryAccountStore,
-	createMemoryEpochStore,
+	createMemoryGrantStore,
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
@@ -25,7 +25,7 @@ const deepFreeze = <Value>(value: Value): Value => {
 
 const optionsOf = (): AuthOptions => ({
 	accounts: createMemoryAccountStore(),
-	epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
+	grants: createMemoryGrantStore(),
 	tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 	meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
 	secrets: [{ version: 1, value: "surface-secret-0123456789abcdefghijklm" }],
@@ -79,7 +79,7 @@ test("A21, A25: the public surface is exactly this, so a new export or a weakeni
 
 	const optionKeys = {
 		accounts: true,
-		epochs: true,
+		grants: true,
 		tokenStore: true,
 		meterStore: true,
 		secrets: true,

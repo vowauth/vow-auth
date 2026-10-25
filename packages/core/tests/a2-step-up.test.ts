@@ -1,6 +1,6 @@
 import {
 	createMemoryAccountStore,
-	createMemoryEpochStore,
+	createMemoryGrantStore,
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
@@ -99,7 +99,7 @@ const createFixture = async (options: Options = {}) => {
 			totp: factorPluginOf(watched(totpFactor), { providers: ["totp"] }),
 		},
 		accounts,
-		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
+		grants: createMemoryGrantStore(),
 		tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 		meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
 		secrets: SECRETS,
@@ -248,7 +248,7 @@ test("A2: the session records the factors that were passed and when, and the age
 	}
 
 	const signedInAt = Date.now();
-	const fresh = await auth.sessions.verify(done.value.token);
+	const fresh = await auth.sessions.verify(done.value.token, "acme");
 
 	expect(fresh.ok && fresh.value).toMatchObject({
 		methods: ["email", "totp"],
@@ -258,7 +258,7 @@ test("A2: the session records the factors that were passed and when, and the age
 
 	vi.setSystemTime(signedInAt + 7 * MINUTE);
 
-	const older = await auth.sessions.verify(done.value.token);
+	const older = await auth.sessions.verify(done.value.token, "acme");
 
 	expect(older.ok && older.value.authenticationAgeMilliseconds).toBe(
 		7 * MINUTE,
@@ -274,7 +274,7 @@ test("A2: a session that needed only one factor records only that one", async ()
 		throw new Error("a person with no second factor signs in at once");
 	}
 
-	const verified = await auth.sessions.verify(done.value.token);
+	const verified = await auth.sessions.verify(done.value.token, "acme");
 
 	expect(verified.ok && verified.value.methods).toEqual(["email"]);
 });

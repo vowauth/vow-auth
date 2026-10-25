@@ -16,9 +16,11 @@ import {
 	type AuditSink,
 	report,
 } from "./audit.js";
-import { DECISION_KINDS, evaluatePolicy } from "./decision.js";
+import { DECISION_KINDS, type Decision, evaluatePolicy } from "./decision.js";
 import { type Duration, defineDuration } from "./duration.js";
 import { ERROR_CODES } from "./errors.js";
+import type { StoredGrant } from "./grants/grant-store.js";
+import type { Grants } from "./grants/grants.js";
 import {
 	type Factor,
 	type Proof,
@@ -29,7 +31,6 @@ import {
 } from "./proof.js";
 import { fail, type Result, succeed } from "./result.js";
 import { issueSession } from "./session.js";
-import type { SessionTokens } from "./session-tokens/session-tokens.js";
 import { isNonEmptyString } from "./shared/is-non-empty-string.js";
 import { isStorableText } from "./shared/is-storable-text.js";
 import { own } from "./shared/own.js";
@@ -80,7 +81,7 @@ export type SignInOptions = {
 	readonly records: Records;
 	/** The providers whose verified emails link accounts and count as verified. */
 	readonly trustedProviders: readonly string[];
-	readonly sessionTokens: Pick<SessionTokens, "issue" | "revoke">;
+	readonly grants: Pick<Grants, "issue" | "open" | "enter" | "revokeQuietly">;
 	readonly tokens: Pick<Tokens, "issue" | "consume">;
 	/** Answers `"allow"` to let a sign in create an account or a membership, or bring one back; anything else refuses. */
 	readonly registration: (input: RegistrationPolicyInput) => unknown;
@@ -90,7 +91,6 @@ export type SignInOptions = {
 	 * demand a stronger or fresher one.
 	 */
 	readonly policy: (input: SignInPolicyInput) => unknown;
-	readonly sessionTimeToLiveMilliseconds: number;
 	/**
 	 * How long a person has to pass the second factor after the first. Without
 	 * it a policy cannot ask for another factor, and a step-up verdict is a deny.
@@ -108,6 +108,16 @@ export type SignInRequest = {
 	readonly response: unknown;
 	/** The `continuation` of a `step-up-required` refusal, when this is its second step. */
 	readonly continuation?: string;
+};
+
+/** An entry into a tenant that an account session was let into. */
+export type Entered = {
+	readonly tenant: string;
+	readonly account: string;
+	readonly subject: string;
+	readonly membership: MembershipOutcome;
+	/** The accounts whose unverified claims of the proven email were evicted. */
+	readonly evicted: readonly string[];
 };
 
 /** A signed in session: the bearer token and who it is for. */
@@ -144,6 +154,18 @@ export type SignInRefusal = string | StepUpRequired;
 export type SignIn = (
 	request: SignInRequest,
 ) => Promise<Result<SignedIn, SignInRefusal>>;
+
+/**
+ * Lets the account session of the token into another tenant without a new
+ * sign in, when the policies of that tenant are content with the factors the
+ * session was signed in with. When the tenant wants one more, the refusal
+ * names it with a continuation; its second step goes through `signIn` and
+ * gives a new session.
+ */
+export type Enter = (
+	token: string,
+	tenant: string,
+) => Promise<Result<Entered, SignInRefusal>>;
 
 type Progress = {
 	readonly device: string;
@@ -200,31 +222,26 @@ const parseProofs = (raw: string | undefined): readonly Proof[] | undefined => {
  * and both policies decide again with every proof. The session records which
  * factors were passed and when.
  */
-export function createSignIn(options: SignInOptions): SignIn {
+export function createSignInFlow(options: SignInOptions): {
+	readonly signIn: SignIn;
+	readonly enter: Enter;
+} {
 	const {
 		factors,
 		accounts,
 		records,
 		trustedProviders,
-		sessionTokens,
+		grants,
 		tokens,
 		registration,
 		policy,
-		sessionTimeToLiveMilliseconds,
 		audit,
 	} = options;
-	const sessionTimeToLive = defineDuration(sessionTimeToLiveMilliseconds);
 	const stepUpMilliseconds = own(options, "stepUpTimeToLiveMilliseconds");
 	const stepUpTimeToLive: Result<Duration> | undefined =
 		stepUpMilliseconds === undefined
 			? undefined
 			: defineDuration(stepUpMilliseconds);
-
-	if (!sessionTimeToLive.ok) {
-		throw new RangeError(
-			"sessionTimeToLiveMilliseconds must be a positive finite number",
-		);
-	}
 
 	if (stepUpTimeToLive !== undefined && !stepUpTimeToLive.ok) {
 		throw new RangeError(
@@ -243,15 +260,21 @@ export function createSignIn(options: SignInOptions): SignIn {
 			proof,
 		);
 
-	const conclude = async (
+	type Finish<Value> = (
+		decision: Extract<Decision, { kind: typeof DECISION_KINDS.allow }>,
+		current: SignInPlan,
+		evicted: readonly string[],
+	) => Promise<Result<Value, SignInRefusal>>;
+
+	const conclude = async <Value>(
 		progress: Progress,
-	): Promise<Result<SignedIn, SignInRefusal>> => {
+		finish: Finish<Value>,
+	): Promise<Result<Value, SignInRefusal>> => {
 		const { device, plan: current, proofs } = progress;
 		const { tenant, accountId, subjectId } = current;
 		const latest = proofs[proofs.length - 1];
-		const first = proofs[0];
 
-		if (latest === undefined || first === undefined) {
+		if (latest === undefined) {
 			return fail(ERROR_CODES.invalidProof);
 		}
 
@@ -328,7 +351,12 @@ export function createSignIn(options: SignInOptions): SignIn {
 		}
 
 		const applied = await applyPlan(
-			{ store: accounts, sessionTokens, trustedProviders, audit },
+			{
+				store: accounts,
+				revoke: grants.revokeQuietly,
+				trustedProviders,
+				audit,
+			},
 			current,
 		);
 
@@ -336,36 +364,65 @@ export function createSignIn(options: SignInOptions): SignIn {
 			return fail(applied.error);
 		}
 
-		const session = issueSession(decision);
-
-		if (!session.ok) {
-			return fail(session.error);
-		}
-
-		const token = await sessionTokens.issue(session.value, {
-			tenant,
-			device,
-			timeToLive: sessionTimeToLive.value,
-			methods: proofs.map((proof) => proof.factor),
-		});
-
-		if (!token.ok) {
-			return fail(token.error);
-		}
-
-		return succeed({
-			token: token.value,
-			tenant,
-			account: accountId,
-			subject: subjectId,
-			device,
-			session: session.value.id,
-			identity: current.identity,
-			membership: current.membership,
-			email: first.claims.email?.address,
-			evicted: applied.value,
-		});
+		return finish(decision, current, applied.value);
 	};
+
+	const newSession =
+		(device: string, proofs: readonly Proof[]): Finish<SignedIn> =>
+		async (decision, current, evicted) => {
+			const session = issueSession(decision);
+
+			if (!session.ok) {
+				return fail(session.error);
+			}
+
+			const token = await grants.issue(session.value, {
+				accountId: current.accountId,
+				tenant: current.tenant,
+				subjectId: current.subjectId,
+				device,
+				proofs,
+			});
+
+			if (!token.ok) {
+				return fail(token.error);
+			}
+
+			return succeed({
+				token: token.value,
+				tenant: current.tenant,
+				account: current.accountId,
+				subject: current.subjectId,
+				device,
+				session: session.value.id,
+				identity: current.identity,
+				membership: current.membership,
+				email: proofs[0]?.claims.email?.address,
+				evicted,
+			});
+		};
+
+	const intoSession =
+		(session: StoredGrant): Finish<Entered> =>
+		async (_decision, current, evicted) => {
+			const entered = await grants.enter(
+				session,
+				current.tenant,
+				current.subjectId,
+			);
+
+			if (!entered.ok) {
+				return fail(entered.error);
+			}
+
+			return succeed({
+				tenant: current.tenant,
+				account: current.accountId,
+				subject: current.subjectId,
+				membership: current.membership,
+				evicted,
+			});
+		};
 
 	const refuseContinuation = async (
 		reason: string,
@@ -405,7 +462,10 @@ export function createSignIn(options: SignInOptions): SignIn {
 			return fail(planned.error);
 		}
 
-		return conclude({ device, plan: planned.value, proofs: [proof.value] });
+		return conclude(
+			{ device, plan: planned.value, proofs: [proof.value] },
+			newSession(device, [proof.value]),
+		);
 	};
 
 	const secondStep = async (
@@ -496,14 +556,15 @@ export function createSignIn(options: SignInOptions): SignIn {
 			);
 		}
 
-		return conclude({
-			device,
-			plan: planned.value,
-			proofs: [...earlier, proof.value],
-		});
+		const proofs = [...earlier, proof.value];
+
+		return conclude(
+			{ device, plan: planned.value, proofs },
+			newSession(device, proofs),
+		);
 	};
 
-	return async (request) => {
+	const signIn: SignIn = async (request) => {
 		const { tenant, device } = request;
 		const continuation = own(request, "continuation");
 		const factor =
@@ -524,4 +585,68 @@ export function createSignIn(options: SignInOptions): SignIn {
 			? firstStep(request, factor)
 			: secondStep(request, factor, continuation);
 	};
+
+	const enter: Enter = async (token, tenant) => {
+		if (!isStorableText(tenant)) {
+			return fail(ERROR_CODES.invalidRequest);
+		}
+
+		const opened = await grants.open(token, tenant);
+
+		if (!opened.ok) {
+			return fail(ERROR_CODES.invalidSession);
+		}
+
+		const { session, entry, proofs } = opened.value;
+		const first = proofs[0];
+
+		if (
+			entry !== undefined &&
+			!entry.revoked &&
+			entry.subjectId !== undefined
+		) {
+			return succeed({
+				tenant,
+				account: session.accountId,
+				subject: entry.subjectId,
+				membership: MEMBERSHIP_OUTCOMES.existing,
+				evicted: [],
+			});
+		}
+
+		if (first === undefined) {
+			return fail(ERROR_CODES.invalidSession);
+		}
+
+		const planned = await plan(tenant, first);
+
+		if (!planned.ok) {
+			return fail(planned.error);
+		}
+
+		if (planned.value.accountId !== session.accountId) {
+			await report(audit, {
+				event: AUDIT_EVENTS.identityResolve,
+				outcome: AUDIT_OUTCOMES.refusal,
+				reason: AUDIT_REASONS.conflict,
+				tenant,
+				subject: "",
+				detail: { account: session.accountId, session: session.id },
+			});
+
+			return fail(ERROR_CODES.conflict);
+		}
+
+		return conclude(
+			{ device: session.device ?? "", plan: planned.value, proofs },
+			intoSession(session),
+		);
+	};
+
+	return { signIn, enter };
+}
+
+/** Creates the sign-in flow alone; see `createSignInFlow`. */
+export function createSignIn(options: SignInOptions): SignIn {
+	return createSignInFlow(options).signIn;
 }

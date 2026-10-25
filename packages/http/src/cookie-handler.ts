@@ -51,7 +51,9 @@ export type CookieHandlerOptions = Omit<HandlerOptions, "auth"> & {
  * Origin) and carry JSON, so another site cannot post to it, and the header
  * Authorization is not read at all. Each browser gets a device the engine
  * issues, in a sealed cookie, so signing out of a device ends this browser
- * and no other.
+ * and no other. The id of the account never reaches the page: the backend of
+ * the application reads it from `sessions.verify`. A sign in ends the session
+ * the browser had, as its cookie is overwritten.
  */
 export function createCookieHandler(
 	options: CookieHandlerOptions,
@@ -120,7 +122,6 @@ export function createCookieHandler(
 			answer(
 				200,
 				{
-					account: signedIn.account,
 					subject: signedIn.subject,
 					tenant: signedIn.tenant,
 					identity: signedIn.identity,
@@ -129,6 +130,13 @@ export function createCookieHandler(
 				},
 				[serializeCookie(session, signedIn.token), ...choice.cookies],
 			),
+		sessionAnswer: ({ account: _account, ...seen }) => seen,
+		enteredAnswer: ({ tenant, subject, membership }) => ({
+			tenant,
+			subject,
+			membership,
+		}),
+		replacesSession: true,
 		sessionEnded: () => [clearCookie(session)],
 	};
 

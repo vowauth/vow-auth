@@ -1,6 +1,6 @@
 import {
 	createMemoryAccountStore,
-	createMemoryEpochStore,
+	createMemoryGrantStore,
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
@@ -144,7 +144,7 @@ const createFixture = async (options: Options = {}) => {
 			code: repeating(GOOD_CODE, "code"),
 			sms: repeating(SMS_CODE, "sms"),
 		},
-		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
+		grants: createMemoryGrantStore(),
 		tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 		meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
 		secrets: options.secrets ?? [OLD_SECRET],
@@ -186,8 +186,10 @@ const createFixture = async (options: Options = {}) => {
 		return result.value;
 	};
 
-	const isValid = async (token: string) =>
-		(await auth.sessions.verify(token)).ok;
+	const isValid = async (signed: {
+		readonly token: string;
+		readonly tenant: string;
+	}) => (await auth.sessions.verify(signed.token, signed.tenant)).ok;
 
 	return { auth, base, forgotten, isValid, signIn, signedIn, store, writes };
 };
@@ -239,7 +241,7 @@ test("a subject removed from a tenant and let back in keeps its id", async () =>
 	const first = await signedIn("acme", "email", { email: "ivan@example.com" });
 
 	expect((await auth.memberships.remove("acme", first.subject)).ok).toBe(true);
-	expect(await isValid(first.token)).toBe(false);
+	expect(await isValid(first)).toBe(false);
 
 	const back = await signIn("acme", "email", { email: "ivan@example.com" });
 
@@ -302,13 +304,13 @@ test("a sign in waiting for its second factor writes nothing, and writes everyth
 	);
 
 	expect(writes).toEqual([]);
-	expect(await isValid(squatter.token)).toBe(true);
+	expect(await isValid(squatter)).toBe(true);
 
 	const done = await step("code", { code: GOOD_CODE }, continuation);
 
 	expect(done.ok && done.value.identity).toBe("created");
 	expect(writes).toEqual(["createAccount", "evictEmailClaims"]);
-	expect(await isValid(squatter.token)).toBe(false);
+	expect(await isValid(squatter)).toBe(false);
 });
 
 test("a wrong second factor and a denied sign in write nothing either", async () => {
@@ -367,7 +369,7 @@ test("a wrong second factor and a denied sign in write nothing either", async ()
 	expect(wrong).toEqual({ ok: false, error: "invalid-proof" });
 	expect(denied).toEqual({ ok: false, error: "no-allow" });
 	expect(writes).toEqual([]);
-	expect(await isValid(squatterIn.value.token)).toBe(true);
+	expect(await isValid(squatterIn.value)).toBe(true);
 
 	void signedIn;
 });
@@ -387,9 +389,9 @@ test("A9: proving an email evicts its unverified claims in the whole deployment,
 	expect(squatterInGlobex.account).toBe(squatterInAcme.account);
 	expect(victim.account).not.toBe(squatterInAcme.account);
 	expect(victim.evicted).toEqual([squatterInAcme.account]);
-	expect(await isValid(squatterInAcme.token)).toBe(false);
-	expect(await isValid(squatterInGlobex.token)).toBe(false);
-	expect(await isValid(victim.token)).toBe(true);
+	expect(await isValid(squatterInAcme)).toBe(false);
+	expect(await isValid(squatterInGlobex)).toBe(false);
+	expect(await isValid(victim)).toBe(true);
 	expect((await base.getAccount(squatterInAcme.account))?.evicted).toBe(true);
 	expect(
 		await base.findIdentity("password", "victim@example.com"),
@@ -410,7 +412,7 @@ test("A9: an account with another identity stays, loses only the claim, and lose
 	});
 
 	expect(victim.evicted).toEqual([mixed.account]);
-	expect(await isValid(mixed.token)).toBe(false);
+	expect(await isValid(mixed)).toBe(false);
 	expect(await base.findIdentity("google", "g-1")).toBeUndefined();
 	expect((await base.getAccount(mixed.account))?.evicted).toBe(true);
 });
@@ -439,7 +441,7 @@ test("linking by email needs a trusted provider; a verified email from another c
 
 	expect(again.account).toBe(owner.account);
 	expect(again.evicted).toEqual([google.account]);
-	expect(await isValid(google.token)).toBe(false);
+	expect(await isValid(google)).toBe(false);
 	expect(await base.findIdentity("google", "g-1")).toBeUndefined();
 });
 
@@ -592,7 +594,7 @@ test("a tenant that does not exist or is disabled lets nobody in, and disabling 
 		ok: true,
 		value: "globex",
 	});
-	expect(await isValid(ivan.token)).toBe(false);
+	expect(await isValid(ivan)).toBe(false);
 	expect(
 		await signIn("globex", "email", { email: "ivan@example.com" }),
 	).toEqual({
@@ -628,8 +630,8 @@ test("a suspended membership is refused until it is restored, with its sessions 
 		ok: true,
 		value: { tenant: "acme", subject: ivan.subject, status: "suspended" },
 	});
-	expect(await isValid(ivan.token)).toBe(false);
-	expect(await isValid(elsewhere.token)).toBe(true);
+	expect(await isValid(ivan)).toBe(false);
+	expect(await isValid(elsewhere)).toBe(true);
 	expect(await signIn("acme", "email", { email: "ivan@example.com" })).toEqual({
 		ok: false,
 		error: "suspended",
@@ -662,8 +664,8 @@ test("A10: deleting an account takes its identities and the data of its factors,
 		{ tenant: "globex", subject: inGlobex.subject, status: "removed" },
 	]);
 	expect(forgotten).toEqual([inAcme.account]);
-	expect(await isValid(inAcme.token)).toBe(false);
-	expect(await isValid(inGlobex.token)).toBe(false);
+	expect(await isValid(inAcme)).toBe(false);
+	expect(await isValid(inGlobex)).toBe(false);
 	expect(await base.getAccount(inAcme.account)).toBeUndefined();
 	expect(await base.findIdentity("email", "ivan@example.com")).toBeUndefined();
 	expect(await base.getMembership("acme", inAcme.subject)).toMatchObject({
@@ -704,14 +706,14 @@ test("sessions are revoked before the store changes, so a failure never leaves a
 	await expect(auth.accounts.delete(ivan.account)).rejects.toThrow(
 		"the database is down",
 	);
-	expect(await isValid(ivan.token)).toBe(false);
+	expect(await isValid(ivan)).toBe(false);
 	expect(await base.getAccount(ivan.account)).toBeDefined();
 });
 
-test("a failing sink during a change that takes access away still leaves the sessions revoked", async () => {
+test("changes that take access away are recorded after they are made, so a failing sink still leaves them done", async () => {
 	const records: AuditRecord[] = [];
 	let failing = false;
-	const { auth, isValid, signedIn } = await createFixture({
+	const { auth, base, isValid, signedIn } = await createFixture({
 		audit: async (record) => {
 			if (failing) {
 				throw new Error("the audit store is down");
@@ -730,21 +732,20 @@ test("a failing sink during a change that takes access away still leaves the ses
 
 	failing = false;
 
-	expect(await isValid(ivan.token)).toBe(false);
+	expect(await isValid(ivan)).toBe(false);
+	expect((await base.getMembership("acme", ivan.subject))?.status).toBe(
+		"suspended",
+	);
 
 	records.length = 0;
 
-	await auth.memberships.suspend("acme", ivan.subject);
 	await auth.memberships.restore("acme", ivan.subject);
 	await auth.accounts.delete(ivan.account);
 
 	expect(
 		records.map((record) => [record.event, record.outcome, record.reason]),
 	).toEqual([
-		["session.revoke", "success", "revoked"],
-		["membership.change", "success", "suspended"],
 		["membership.change", "success", "restored"],
-		["session.revoke", "success", "revoked"],
 		["account.delete", "success", "deleted"],
 	]);
 });
@@ -844,7 +845,7 @@ test("registration is required, and a trusted provider must be one a factor clai
 	const options = {
 		accounts: createMemoryAccountStore(),
 		factors: { email: factorPluginOf(async () => succeed({})) },
-		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
+		grants: createMemoryGrantStore(),
 		tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 		meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
 		secrets: [OLD_SECRET],
@@ -897,7 +898,7 @@ test("a policy may ask for as many factors as it likes, each one once, and the s
 		throw new Error("three factors must sign in");
 	}
 
-	expect(await auth.sessions.verify(done.value.token)).toMatchObject({
+	expect(await auth.sessions.verify(done.value.token, "acme")).toMatchObject({
 		ok: true,
 		value: { methods: ["email", "code", "sms"] },
 	});

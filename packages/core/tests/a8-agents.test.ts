@@ -1,6 +1,6 @@
 import {
 	createMemoryAccountStore,
-	createMemoryEpochStore,
+	createMemoryGrantStore,
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
@@ -12,7 +12,7 @@ import {
 	type RevocationLevel,
 	succeed,
 } from "@vow-auth/core";
-import { createSealer } from "@vow-auth/core/internal";
+import { createRecordSeal, createRecords } from "@vow-auth/core/internal";
 import { durationOf, factorPluginOf } from "@vow-auth/test-support";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
@@ -51,12 +51,13 @@ const emailFactor: Factor = {
 
 const createFixture = () => {
 	const records: AuditRecord[] = [];
+	const grantStore = createMemoryGrantStore();
 	const auth = createAuth({
 		factors: {
 			email: factorPluginOf(emailFactor.verify, { providers: ["email"] }),
 		},
 		accounts: createMemoryAccountStore(),
-		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
+		grants: grantStore,
 		tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 		meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
 		secrets: [{ version: 1, value: SECRET }],
@@ -92,6 +93,7 @@ const createFixture = () => {
 		boundToSession = false,
 	) => {
 		const result = await auth.agents.delegate(sessionToken, {
+			tenant: "acme",
 			agent,
 			timeToLive: durationOf(30 * MINUTE),
 			boundToSession,
@@ -106,7 +108,7 @@ const createFixture = () => {
 
 	const alive = async (token: string) => (await auth.agents.verify(token)).ok;
 
-	return { auth, records, signIn, delegate, alive };
+	return { auth, grantStore, records, signIn, delegate, alive };
 };
 
 test("A8: a person's session token becomes an agent's token that names the person, the agent and the delegation", async () => {
@@ -118,6 +120,7 @@ test("A8: a person's session token becomes an agent's token that names the perso
 	expect(verified).toEqual({
 		ok: true,
 		value: {
+			account: alice.account,
 			tenant: "acme",
 			subject: alice.subject,
 			agent: "mcp-client-7",
@@ -133,7 +136,7 @@ test("A8: an agent token is never a session and a session token is never an agen
 	const alice = await signIn("alice@example.com", "laptop");
 	const { token } = await delegate(alice.token, "mcp-client-7");
 
-	expect(await auth.sessions.verify(token)).toEqual({
+	expect(await auth.sessions.verify(token, "acme")).toEqual({
 		ok: false,
 		error: "invalid-session",
 	});
@@ -143,6 +146,7 @@ test("A8: an agent token is never a session and a session token is never an agen
 	});
 	expect(
 		await auth.agents.delegate(token, {
+			tenant: "acme",
 			agent: "second-hop",
 			timeToLive: durationOf(MINUTE),
 		}),
@@ -165,15 +169,12 @@ const levelsOf = (
 	alice: { subject: string; session: string },
 	laptopDelegation: string,
 ): readonly (readonly [string, RevocationLevel])[] => [
-	["the tenant", { tenant: "acme", scope: "tenant" }],
-	["the person", { tenant: "acme", scope: "user", id: alice.subject }],
-	["the agent", { tenant: "acme", scope: "agent", id: "mcp-client-7" }],
-	[
-		"the delegation",
-		{ tenant: "acme", scope: "delegation", id: laptopDelegation },
-	],
-	["the device", { tenant: "acme", scope: "device", id: "laptop" }],
-	["the session", { tenant: "acme", scope: "session", id: alice.session }],
+	["the tenant", { scope: "tenant", tenant: "acme" }],
+	["the person", { scope: "subject", tenant: "acme", id: alice.subject }],
+	["the agent", { scope: "agent", tenant: "acme", id: "mcp-client-7" }],
+	["the delegation", { scope: "delegation", id: laptopDelegation }],
+	["the device", { scope: "device", id: "laptop" }],
+	["the session", { scope: "session", id: alice.session }],
 ];
 
 test("A8: revoking a level kills exactly the agents below it", async () => {
@@ -231,13 +232,13 @@ test("A8: revoking the parent also ends the person's own sessions, so the whole 
 	const agent = await delegate(alice.token, "mcp-client-7", true);
 
 	await auth.sessions.revoke({
+		scope: "subject",
 		tenant: "acme",
-		scope: "user",
 		id: alice.subject,
 	});
 
-	expect((await auth.sessions.verify(alice.token)).ok).toBe(false);
-	expect((await auth.sessions.verify(phone.token)).ok).toBe(false);
+	expect((await auth.sessions.verify(alice.token, "acme")).ok).toBe(false);
+	expect((await auth.sessions.verify(phone.token, "acme")).ok).toBe(false);
 	expect(await alive(agent.token)).toBe(false);
 });
 
@@ -256,11 +257,7 @@ test("A8: a revoked agent stays revoked for a delegation made after, and a revok
 	const alice = await signIn("alice@example.com", "laptop");
 	const first = await delegate(alice.token, "mcp-client-7");
 
-	await auth.sessions.revoke({
-		tenant: "acme",
-		scope: "delegation",
-		id: first.delegation,
-	});
+	await auth.sessions.revoke({ scope: "delegation", id: first.delegation });
 
 	const second = await delegate(alice.token, "mcp-client-7");
 
@@ -271,18 +268,18 @@ test("A8: a revoked agent stays revoked for a delegation made after, and a revok
 test("A8: delegating needs a living session of the person", async () => {
 	const { auth, signIn, records } = createFixture();
 	const alice = await signIn("alice@example.com", "laptop");
-	const input = { agent: "mcp-client-7", timeToLive: durationOf(MINUTE) };
+	const input = {
+		tenant: "acme",
+		agent: "mcp-client-7",
+		timeToLive: durationOf(MINUTE),
+	};
 
 	expect(await auth.agents.delegate("garbage", input)).toEqual({
 		ok: false,
 		error: "invalid-session",
 	});
 
-	await auth.sessions.revoke({
-		tenant: "acme",
-		scope: "session",
-		id: alice.session,
-	});
+	await auth.sessions.revoke({ scope: "session", id: alice.session });
 
 	expect(await auth.agents.delegate(alice.token, input)).toEqual({
 		ok: false,
@@ -298,12 +295,21 @@ test("A8: a delegation with a name or a life time the core cannot use is refused
 	const alice = await signIn("alice@example.com", "laptop");
 
 	const inputs: readonly unknown[] = [
-		{ agent: "", timeToLive: durationOf(MINUTE) },
-		{ agent: "mcp-client-7", timeToLive: durationOf(MAXIMUM_LIFE + 1) },
-		{ agent: "mcp-client-7", timeToLive: { milliseconds: MINUTE } },
-		{ agent: 7, timeToLive: durationOf(MINUTE) },
-		{ timeToLive: durationOf(MINUTE) },
-		{ agent: "mcp-client-7" },
+		{ tenant: "acme", agent: "", timeToLive: durationOf(MINUTE) },
+		{
+			tenant: "acme",
+			agent: "mcp-client-7",
+			timeToLive: durationOf(MAXIMUM_LIFE + 1),
+		},
+		{
+			tenant: "acme",
+			agent: "mcp-client-7",
+			timeToLive: { milliseconds: MINUTE },
+		},
+		{ tenant: "acme", agent: 7, timeToLive: durationOf(MINUTE) },
+		{ tenant: "acme", timeToLive: durationOf(MINUTE) },
+		{ tenant: "acme", agent: "mcp-client-7" },
+		{ agent: "mcp-client-7", timeToLive: durationOf(MINUTE) },
 	];
 
 	for (const input of inputs) {
@@ -318,6 +324,7 @@ test("A8: an agent token expires by the delegation's life time", async () => {
 	const { auth, signIn } = createFixture();
 	const alice = await signIn("alice@example.com", "laptop");
 	const delegated = await auth.agents.delegate(alice.token, {
+		tenant: "acme",
 		agent: "mcp-client-7",
 		timeToLive: durationOf(10 * MINUTE),
 	});
@@ -333,82 +340,57 @@ test("A8: an agent token expires by the delegation's life time", async () => {
 	expect((await auth.agents.verify(delegated.value.token)).ok).toBe(false);
 });
 
-test("A8: an agent chain of an unknown shape is rejected", async () => {
-	const { auth } = createFixture();
-	const sealer = createSealer({
-		secrets: [{ version: 1, value: SECRET }],
-		domain: "core",
+test("A8: an agent grant written past the engine, or a grant of another kind, opens nothing", async () => {
+	const { auth, grantStore } = createFixture();
+	const sealed = createRecords(
+		createRecordSeal({ secrets: [{ version: 1, value: SECRET }] }),
+	);
+	const hashOf = async (text: string) =>
+		Array.from(
+			new Uint8Array(
+				await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)),
+			),
+			(byte) => byte.toString(16).padStart(2, "0"),
+		).join("");
+	const grantFor = async (token: string, kind: "agent" | "session") => ({
+		id: crypto.randomUUID(),
+		kind,
+		tokenHash: await hashOf(token),
+		accountId: "acc_mallory",
+		tenant: "acme",
+		subjectId: "sub_mallory",
+		device: undefined,
+		agent: "bot",
+		parentId: undefined,
+		sessionId: undefined,
+		proofs: undefined,
+		authenticatedAtMilliseconds: Date.now(),
+		expiresAtMilliseconds: Date.now() + MINUTE,
+		idleExpiresAtMilliseconds: undefined,
+		revoked: false,
 	});
-	const link = (scope: string, id: string) => ({
-		scope,
-		id,
-		stamp: Date.now(),
+	const forged = `vag_${"a".repeat(64)}`;
+	const otherKind = `vag_${"b".repeat(64)}`;
+
+	await grantStore.createGrant({
+		...(await grantFor(forged, "agent")),
+		seal: "1.AAAA",
 	});
-	const shapes: readonly (readonly [string, readonly unknown[]])[] = [
-		[
-			"four links, the known shape",
-			[
-				link("tenant", "acme"),
-				link("user", "alice"),
-				link("agent", "a"),
-				link("delegation", "d"),
-			],
-		],
-		[
-			"a session chain",
-			[
-				link("tenant", "acme"),
-				link("user", "alice"),
-				link("device", "laptop"),
-				link("session", "s"),
-			],
-		],
-		[
-			"five links",
-			[
-				link("tenant", "acme"),
-				link("user", "alice"),
-				link("device", "laptop"),
-				link("agent", "a"),
-				link("delegation", "d"),
-			],
-		],
-		[
-			"the agent before the person",
-			[
-				link("tenant", "acme"),
-				link("agent", "a"),
-				link("user", "alice"),
-				link("delegation", "d"),
-			],
-		],
-		[
-			"a delegation without an agent",
-			[link("tenant", "acme"), link("user", "alice"), link("delegation", "d")],
-		],
-	];
-	const accepted: string[] = [];
+	await grantStore.createGrant(
+		await sealed.grant(await grantFor(otherKind, "session")),
+	);
 
-	for (const [name, chain] of shapes) {
-		const token = await sealer.seal({
-			purpose: "agent",
-			payload: {
-				chain: JSON.stringify(chain),
-				expiresAtMilliseconds: String(Date.now() + MINUTE),
-				delegatedAtMilliseconds: String(Date.now()),
-			},
-			timeToLive: durationOf(MINUTE),
-		});
-
-		if ((await auth.agents.verify(token)).ok) {
-			accepted.push(name);
-		}
-	}
-
-	expect(accepted).toEqual(["four links, the known shape"]);
+	expect(await auth.agents.verify(forged)).toEqual({
+		ok: false,
+		error: "invalid-session",
+	});
+	expect(await auth.agents.verify(otherKind)).toEqual({
+		ok: false,
+		error: "invalid-session",
+	});
 });
 
-test("A8: the audit records a delegation, and says which level of the chain was revoked", async () => {
+test("A8: the audit records a delegation, and a refused agent with the reason", async () => {
 	const { auth, signIn, delegate, records } = createFixture();
 	const alice = await signIn("alice@example.com", "laptop");
 	const { token, delegation } = await delegate(alice.token, "mcp-client-7");
@@ -425,8 +407,8 @@ test("A8: the audit records a delegation, and says which level of the chain was 
 	});
 
 	await auth.sessions.revoke({
-		tenant: "acme",
 		scope: "agent",
+		tenant: "acme",
 		id: "mcp-client-7",
 	});
 	records.length = 0;
@@ -437,7 +419,7 @@ test("A8: the audit records a delegation, and says which level of the chain was 
 			event: "session.verify",
 			outcome: "refusal",
 			reason: "revoked",
-			detail: { agent: "mcp-client-7", delegation, scope: "agent" },
+			detail: { agent: "mcp-client-7", delegation, scope: "delegation" },
 		}),
 	]);
 });
@@ -447,7 +429,7 @@ test("A8: the audit of a refused agent carries no secret", async () => {
 	const alice = await signIn("alice@example.com", "laptop");
 	const { token } = await delegate(alice.token, "mcp-client-7");
 
-	await auth.sessions.revoke({ tenant: "acme", scope: "tenant" });
+	await auth.sessions.revoke({ scope: "tenant", tenant: "acme" });
 	await auth.agents.verify(token);
 
 	expect(JSON.stringify(records)).not.toContain(token);

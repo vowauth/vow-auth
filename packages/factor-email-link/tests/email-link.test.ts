@@ -1,6 +1,6 @@
 import {
 	createMemoryAccountStore,
-	createMemoryEpochStore,
+	createMemoryGrantStore,
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
@@ -81,7 +81,7 @@ const createEngine = async () => {
 	const tokenStore = createMemoryTokenStore({ maximumBytes: 1_000_000 });
 	const auth = createAuth({
 		accounts: createMemoryAccountStore(),
-		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
+		grants: createMemoryGrantStore(),
 		tokenStore,
 		meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
 		secrets: [{ version: 1, value: SECRET }],
@@ -140,17 +140,19 @@ test("a link signs a person in end to end and revocation ends the session", asyn
 
 	expect(signedIn.value.identity).toBe("created");
 
-	const verified = await auth.sessions.verify(signedIn.value.token);
+	const verified = await auth.sessions.verify(signedIn.value.token, "acme");
 
 	expect(verified.ok && verified.value.subject).toBe(signedIn.value.subject);
 
 	await auth.sessions.revoke({
 		tenant: "acme",
-		scope: "user",
+		scope: "subject",
 		id: signedIn.value.subject,
 	});
 
-	expect((await auth.sessions.verify(signedIn.value.token)).ok).toBe(false);
+	expect((await auth.sessions.verify(signedIn.value.token, "acme")).ok).toBe(
+		false,
+	);
 });
 
 test("another spelling of the address signs in as the same account", async () => {

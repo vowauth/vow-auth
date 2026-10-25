@@ -57,7 +57,7 @@ const resolve = async (
 	}
 
 	const applied = await applyPlan(
-		{ ...options, sessionTokens: { revoke: async () => undefined } },
+		{ ...options, revoke: async () => undefined },
 		plan.value,
 	);
 
@@ -151,10 +151,7 @@ test("A3: a link to an owner deleted in the meantime is refused and never brings
 	await accounts.store.deleteAccount(owner);
 
 	expect(
-		await applyPlan(
-			{ ...options, sessionTokens: { revoke: async () => undefined } },
-			plan.value,
-		),
+		await applyPlan({ ...options, revoke: async () => undefined }, plan.value),
 	).toEqual({ ok: false, error: "conflict" });
 	expect(await accounts.store.getAccount(owner)).toBeUndefined();
 	expect(await accounts.store.findIdentity("google", "g-1")).toBeUndefined();

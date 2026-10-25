@@ -1,12 +1,11 @@
 import {
-	createMemoryEpochStore,
+	createMemoryGrantStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
 import * as core from "@vow-auth/core";
 import {
 	type AuditRecord,
-	createSealer,
-	createSessionTokens,
+	createGrants,
 	createSignIn,
 	createTokens,
 	type Factor,
@@ -15,7 +14,6 @@ import {
 	type SignInRequest,
 	succeed,
 } from "@vow-auth/core/internal";
-import { durationOf } from "@vow-auth/test-support";
 import { expect, test, vi } from "vitest";
 import { createAccounts } from "./support/accounts.js";
 
@@ -44,28 +42,26 @@ const createFixture = async (options: {
 }) => {
 	const accounts = await createAccounts();
 	const audit = options.audit;
-	const sessionTokens = createSessionTokens({
-		sealer: createSealer({
-			secrets: [{ version: 1, value: "flow-secret-0123456789abcdefghijklmn" }],
-		}),
-		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
-		maximumLifeTimeMilliseconds: LIFE_TIME,
+	const grants = createGrants({
+		store: createMemoryGrantStore(),
+		records: accounts.records,
+		idleMilliseconds: LIFE_TIME,
+		maximumMilliseconds: LIFE_TIME,
 		audit,
 	});
-	const issueSpy = vi.spyOn(sessionTokens, "issue");
+	const issueSpy = vi.spyOn(grants, "issue");
 	const factors = new Map<string, Factor>();
 	const signInById = createSignIn({
 		factors,
 		accounts: accounts.store,
 		records: accounts.records,
 		trustedProviders: ["email"],
-		sessionTokens,
+		grants,
 		tokens: createTokens({
 			store: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 		}),
 		registration: () => "allow",
 		policy: options.policy ?? (() => "allow"),
-		sessionTimeToLiveMilliseconds: LIFE_TIME,
 		audit,
 	});
 	const signIn = (
@@ -76,7 +72,7 @@ const createFixture = async (options: {
 		return signInById({ ...request, factor: request.factor.id });
 	};
 
-	return { issueSpy, sessionTokens, signIn };
+	return { grants, issueSpy, signIn };
 };
 
 test("A14: the public API has no way to create a session or to build a part without the audit", () => {
@@ -88,7 +84,7 @@ test("A14: the public API has no way to create a session or to build a part with
 		"createSignIn",
 		"createTokens",
 		"createSealer",
-		"createSessionTokens",
+		"createGrants",
 		"createRecordSeal",
 		"createRecords",
 		"createManagement",
@@ -104,14 +100,15 @@ test("A14: the public API has no way to create a session or to build a part with
 });
 
 test("A14: a session that was not born in the flow gets no token", async () => {
-	const { sessionTokens } = await createFixture({});
-	const forged = await sessionTokens.issue(
+	const { grants } = await createFixture({});
+	const forged = await grants.issue(
 		{ id: "s-1", subject: "admin" },
 		{
+			accountId: "acc_admin",
 			tenant: "acme",
+			subjectId: "admin",
 			device: "laptop",
-			timeToLive: durationOf(LIFE_TIME),
-			methods: ["test"],
+			proofs: [],
 		},
 	);
 
@@ -223,7 +220,7 @@ test("A2: every step of every factor is audited", async () => {
 });
 
 test("a verified email evicts earlier claims by itself, nobody has to remember to ask", async () => {
-	const { sessionTokens, signIn } = await createFixture({});
+	const { grants, signIn } = await createFixture({});
 	const squatter = await signIn({
 		tenant: "acme",
 		device: "phone",
@@ -247,8 +244,8 @@ test("a verified email evicts earlier claims by itself, nobody has to remember t
 	}
 
 	expect(victim.value.evicted).toEqual([squatter.value.account]);
-	expect((await sessionTokens.verify(squatter.value.token)).ok).toBe(false);
-	expect((await sessionTokens.verify(victim.value.token)).ok).toBe(true);
+	expect((await grants.verify(squatter.value.token, "acme")).ok).toBe(false);
+	expect((await grants.verify(victim.value.token, "acme")).ok).toBe(true);
 });
 
 test("a refusal reports the step that refused and issues nothing", async () => {

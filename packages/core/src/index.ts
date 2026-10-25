@@ -51,6 +51,20 @@ export type {
 	FactorInstance,
 	FactorPlugin,
 } from "./factor.js";
+export type {
+	AgentReading,
+	GrantKind,
+	GrantStore,
+	RevocationLevel,
+	SessionReading,
+	StoredGrant,
+} from "./grants/grant-store.js";
+export type {
+	DelegateInput,
+	Delegation,
+	VerifiedAgent,
+	VerifiedSession,
+} from "./grants/grants.js";
 export {
 	type CanonicalEmail,
 	canonicalizeEmail,
@@ -94,19 +108,8 @@ export { fail, type Result, succeed } from "./result.js";
 export type { Sealer, SealInput, SecretVersion } from "./sealer.js";
 export type { Session } from "./session.js";
 export type {
-	EpochReading,
-	EpochStore,
-} from "./session-tokens/epoch-store.js";
-export type {
-	DelegateInput,
-	Delegation,
-	IssueSessionTokenInput,
-	RevocationLevel,
-	SessionTokens,
-	VerifiedAgent,
-	VerifiedSession,
-} from "./session-tokens/session-tokens.js";
-export type {
+	Enter,
+	Entered,
 	RegistrationPolicyInput,
 	SignedIn,
 	SignIn,

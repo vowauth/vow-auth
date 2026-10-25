@@ -10,7 +10,9 @@ import {
  * application points at a person in a tenant with a foreign key to
  * `vow_auth_subjects (id)`. A subject is never deleted behind the back of the
  * application: removing it from the tenant only changes its status, and
- * deleting its account leaves it without one.
+ * deleting its account leaves it without one. Grants keep the ids of accounts,
+ * tenants and subjects without foreign keys, so they can live in another
+ * store; the engine deletes the grants of an account it deletes.
  */
 export const POSTGRES_SCHEMA_STATEMENTS: readonly string[] = [
 	`create table if not exists vow_auth_tenants (
@@ -52,6 +54,38 @@ export const POSTGRES_SCHEMA_STATEMENTS: readonly string[] = [
 )`,
 	`create index if not exists vow_auth_subjects_account
 	on vow_auth_subjects (account_id)`,
+	`create table if not exists vow_auth_grants (
+	id text primary key,
+	kind text not null check (kind in ('session', 'tenant', 'agent')),
+	token_hash text unique,
+	account_id text not null,
+	tenant text,
+	subject_id text,
+	device text,
+	agent text,
+	parent_id text references vow_auth_grants (id) on delete cascade,
+	session_id text references vow_auth_grants (id) on delete cascade,
+	proofs text,
+	authenticated_at_milliseconds bigint not null,
+	created_at_milliseconds bigint not null default ${SERVER_NOW_MILLISECONDS},
+	expires_at_milliseconds bigint not null,
+	idle_expires_at_milliseconds bigint,
+	revoked_at_milliseconds bigint,
+	seal text not null
+)`,
+	`create unique index if not exists vow_auth_grants_live_entry
+	on vow_auth_grants (session_id, tenant)
+	where kind = 'tenant' and revoked_at_milliseconds is null`,
+	`create index if not exists vow_auth_grants_session
+	on vow_auth_grants (session_id)`,
+	`create index if not exists vow_auth_grants_account
+	on vow_auth_grants (account_id)`,
+	`create index if not exists vow_auth_grants_subject
+	on vow_auth_grants (tenant, subject_id)`,
+	`create index if not exists vow_auth_grants_device
+	on vow_auth_grants (device)`,
+	`create index if not exists vow_auth_grants_agent
+	on vow_auth_grants (tenant, agent) where kind = 'agent'`,
 	`create table if not exists vow_auth_tokens (
 	hash text primary key,
 	purpose text not null,

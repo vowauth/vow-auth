@@ -1,5 +1,5 @@
 import {
-	createMemoryEpochStore,
+	createMemoryGrantStore,
 	createMemoryMeterStore,
 } from "@vow-auth/adapter-memory";
 import {
@@ -69,7 +69,7 @@ describe.runIf(databaseUrl !== undefined)("postgres specifics", () => {
 			},
 			accounts: createPostgresAccountStore(run),
 			tokenStore: createPostgresTokenStore(run),
-			epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
+			grants: createMemoryGrantStore(),
 			meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
 			secrets: [
 				{ version: 1, value: "postgres-secret-0123456789abcdefghijkl" },
@@ -119,6 +119,7 @@ describe.runIf(databaseUrl !== undefined)("postgres specifics", () => {
 
 			expect(tables.rows.map((row) => row.table_name)).toEqual([
 				"vow_auth_accounts",
+				"vow_auth_grants",
 				"vow_auth_identities",
 				"vow_auth_subjects",
 				"vow_auth_tenants",
@@ -271,7 +272,7 @@ describe.runIf(databaseUrl !== undefined)("postgres specifics", () => {
 			},
 			accounts: createPostgresAccountStore(run),
 			tokenStore: createPostgresTokenStore(run),
-			epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
+			grants: createMemoryGrantStore(),
 			meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
 			secrets: [
 				{ version: 1, value: "postgres-secret-0123456789abcdefghijkl" },

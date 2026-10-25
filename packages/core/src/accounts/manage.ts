@@ -6,11 +6,8 @@ import {
 	report,
 } from "../audit.js";
 import { ERROR_CODES } from "../errors.js";
+import type { RevocationLevel } from "../grants/grant-store.js";
 import { fail, type Result, succeed } from "../result.js";
-import {
-	REVOCATION_SCOPES,
-	type SessionTokens,
-} from "../session-tokens/session-tokens.js";
 import { isStorableText } from "../shared/is-storable-text.js";
 import type {
 	AccountStore,
@@ -62,7 +59,8 @@ export type Memberships = {
 export type ManagementOptions = {
 	readonly store: AccountStore;
 	readonly records: Records;
-	readonly sessionTokens: Pick<SessionTokens, "revoke">;
+	/** Revokes a level of grants without recording it; each change records itself. */
+	readonly revoke: (level: RevocationLevel) => Promise<void>;
 	/** Called for every factor when an account is deleted, so it forgets what it keeps. */
 	readonly forget: (account: string) => Promise<void>;
 	readonly audit?: AuditSink | undefined;
@@ -77,9 +75,10 @@ const viewOf = (membership: StoredMembership): Membership =>
 
 /**
  * Creates the management parts. Each change that takes access away revokes
- * sessions first and changes the records after, so a failure half way never
- * leaves a live session of someone who is out; a change that gives access
- * back is recorded in the audit before it is made. A record whose seal does
+ * grants first, changes the records after and records itself last, so a
+ * failure half way never leaves a live session of someone who is out, and a
+ * failing sink leaves the change made; a change that gives access back is
+ * recorded in the audit before it is made. A record whose seal does
  * not match is not changed: the operation refuses with `invalid-record`.
  */
 export function createManagement(options: ManagementOptions): {
@@ -87,7 +86,7 @@ export function createManagement(options: ManagementOptions): {
 	readonly accounts: Accounts;
 	readonly memberships: Memberships;
 } {
-	const { store, records, sessionTokens, forget } = options;
+	const { store, records, revoke, forget } = options;
 	const audit = options.audit;
 
 	const record = (
@@ -159,10 +158,7 @@ export function createManagement(options: ManagementOptions): {
 		}
 
 		if (disabled) {
-			await sessionTokens.revoke({
-				tenant: id,
-				scope: REVOCATION_SCOPES.tenant,
-			});
+			await revoke({ scope: "tenant", tenant: id });
 		} else {
 			await record(event, AUDIT_OUTCOMES.success, reason, id, "");
 		}
@@ -234,11 +230,7 @@ export function createManagement(options: ManagementOptions): {
 		const narrows = status !== "active";
 
 		if (narrows) {
-			await sessionTokens.revoke({
-				tenant,
-				scope: REVOCATION_SCOPES.user,
-				id: subject,
-			});
+			await revoke({ scope: "subject", tenant, id: subject });
 		} else {
 			await record(event, AUDIT_OUTCOMES.success, reason, tenant, subject);
 		}
@@ -328,7 +320,7 @@ export function createManagement(options: ManagementOptions): {
 
 				const before = await store.listMemberships(account);
 
-				await revokeAccount({ store, sessionTokens }, account);
+				await revokeAccount({ store, revoke }, account);
 				await forget(account);
 
 				const left = await store.deleteAccount(account);
@@ -339,9 +331,9 @@ export function createManagement(options: ManagementOptions): {
 							(earlier) => earlier.subjectId === membership.subjectId,
 						)
 					) {
-						await sessionTokens.revoke({
+						await revoke({
+							scope: "subject",
 							tenant: membership.tenant,
-							scope: REVOCATION_SCOPES.user,
 							id: membership.subjectId,
 						});
 					}

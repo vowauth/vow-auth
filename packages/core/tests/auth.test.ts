@@ -1,5 +1,5 @@
 import {
-	createMemoryEpochStore,
+	createMemoryGrantStore,
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
@@ -94,7 +94,7 @@ const optionsWith = <Factors extends AuthFactors>(
 	factors: Factors,
 ): AuthOptions<Factors> => ({
 	accounts: accountsWith(["acme"], AUTH_SECRETS),
-	epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
+	grants: createMemoryGrantStore(),
 	tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 	meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
 	secrets: AUTH_SECRETS,
@@ -164,7 +164,7 @@ test("one sink reaches every part of the core", async () => {
 		ok: false,
 		error: { code: "rate-limited" },
 	});
-	await auth.sessions.verify("1.garbage");
+	await auth.sessions.verify("1.garbage", "acme");
 	await auth.sessions.revoke({ tenant: "acme", scope: "tenant" });
 	await auth.accounts.delete(signedIn.value.account);
 
@@ -220,7 +220,12 @@ test("no part of the core issues anything for its caller", () => {
 		"signIn",
 		"tenants",
 	]);
-	expect(Object.keys(auth.sessions).sort()).toEqual(["revoke", "verify"]);
+	expect(Object.keys(auth.sessions).sort()).toEqual([
+		"end",
+		"enter",
+		"revoke",
+		"verify",
+	]);
 	expect(Object.keys(auth.accounts)).toEqual(["delete"]);
 	expect(Object.keys(auth.memberships).sort()).toEqual([
 		"remove",
@@ -337,7 +342,7 @@ test("a factor seals nothing that opens as a session, an agent or a device", asy
 		timeToLive: hour,
 	});
 
-	expect(await auth.sessions.verify(session)).toEqual({
+	expect(await auth.sessions.verify(session, "acme")).toEqual({
 		ok: false,
 		error: "invalid-session",
 	});

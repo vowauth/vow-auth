@@ -1,12 +1,5 @@
-import {
-	createRedisEpochStore,
-	createRedisMeterStore,
-} from "@vow-auth/adapter-redis";
-import {
-	epochStoreContract,
-	meterStoreContract,
-	type StoreClock,
-} from "@vow-auth/store-contracts";
+import { createRedisMeterStore } from "@vow-auth/adapter-redis";
+import { meterStoreContract, type StoreClock } from "@vow-auth/store-contracts";
 import { afterAll, beforeAll, describe } from "vitest";
 import { createConnection, sleep } from "./resp-connection.js";
 
@@ -47,11 +40,6 @@ describe.runIf(redisUrl !== undefined)("redis", () => {
 
 	meterStoreContract("redis", {
 		create: () => createRedisMeterStore({ run }),
-		clock,
-	});
-
-	epochStoreContract("redis", {
-		create: () => createRedisEpochStore({ run }),
 		clock,
 	});
 });

@@ -1,5 +1,4 @@
 import {
-	createMemoryEpochStore,
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
@@ -12,27 +11,6 @@ beforeEach(() => {
 
 afterEach(() => {
 	vi.useRealTimers();
-});
-
-test("D4: an epoch store counts the live revocations it forgets when it overflows", async () => {
-	const store = createMemoryEpochStore({ maximumBytes: 700 });
-
-	expect(store.stats()).toEqual({
-		entries: 0,
-		usedBytes: 0,
-		maximumBytes: 700,
-		capacityRefusals: 0,
-		evictions: 0,
-	});
-
-	for (let index = 0; index < 6; index += 1) {
-		await store.revoke(`{acme}:user:${index}`, 60_000);
-	}
-
-	const stats = store.stats();
-
-	expect(stats.evictions).toBeGreaterThan(0);
-	expect(stats.usedBytes).toBeLessThanOrEqual(700);
 });
 
 test("D4: expired entries leave the numbers, live ones stay", async () => {

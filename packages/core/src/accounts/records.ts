@@ -1,3 +1,4 @@
+import type { StoredGrant } from "../grants/grant-store.js";
 import type { RecordCheck, RecordSeal } from "../record-seal.js";
 import type {
 	StoredAccount,
@@ -38,11 +39,30 @@ const membershipFields = (membership: Unsealed<StoredMembership>) => [
 	membership.status,
 ];
 
+const grantFields = (grant: Unsealed<StoredGrant>) => [
+	"grant",
+	grant.id,
+	grant.kind,
+	grant.tokenHash ?? null,
+	grant.accountId,
+	grant.tenant ?? null,
+	grant.subjectId ?? null,
+	grant.device ?? null,
+	grant.agent ?? null,
+	grant.parentId ?? null,
+	grant.sessionId ?? null,
+	grant.proofs ?? null,
+	grant.authenticatedAtMilliseconds,
+	grant.expiresAtMilliseconds,
+];
+
 /**
  * Seals and checks each kind of record. The kind is the first field, so a
  * seal of one kind never passes for another. The eviction mark of an account
  * is not sealed: it only takes access away, and an evicted account has no
- * identity left to sign in with.
+ * identity left to sign in with. Neither are the revocation mark and the idle
+ * end of a grant: the first only takes access away, the second moves while a
+ * session is used and never past the end, which is sealed.
  */
 export const createRecords = (seal: RecordSeal) => {
 	return {
@@ -84,6 +104,26 @@ export const createRecords = (seal: RecordSeal) => {
 				seal: await seal.seal(membershipFields(membership)),
 			});
 		},
+		async grant(grant: Unsealed<StoredGrant>): Promise<StoredGrant> {
+			return Object.freeze({
+				id: grant.id,
+				kind: grant.kind,
+				tokenHash: grant.tokenHash,
+				accountId: grant.accountId,
+				tenant: grant.tenant,
+				subjectId: grant.subjectId,
+				device: grant.device,
+				agent: grant.agent,
+				parentId: grant.parentId,
+				sessionId: grant.sessionId,
+				proofs: grant.proofs,
+				authenticatedAtMilliseconds: grant.authenticatedAtMilliseconds,
+				expiresAtMilliseconds: grant.expiresAtMilliseconds,
+				idleExpiresAtMilliseconds: grant.idleExpiresAtMilliseconds,
+				revoked: grant.revoked,
+				seal: await seal.seal(grantFields(grant)),
+			});
+		},
 		checkTenant: (tenant: StoredTenant): Promise<RecordCheck> =>
 			seal.check(tenantFields(tenant), tenant.seal),
 		checkAccount: (account: StoredAccount): Promise<RecordCheck> =>
@@ -92,6 +132,8 @@ export const createRecords = (seal: RecordSeal) => {
 			seal.check(identityFields(identity), identity.seal),
 		checkMembership: (membership: StoredMembership): Promise<RecordCheck> =>
 			seal.check(membershipFields(membership), membership.seal),
+		checkGrant: (grant: StoredGrant): Promise<RecordCheck> =>
+			seal.check(grantFields(grant), grant.seal),
 	};
 };
 

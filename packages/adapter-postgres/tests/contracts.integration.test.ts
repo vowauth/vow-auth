@@ -1,11 +1,13 @@
 import {
 	createPostgresAccountStore,
+	createPostgresGrantStore,
 	createPostgresSchema,
 	createPostgresTokenStore,
 	type PostgresRunner,
 } from "@vow-auth/adapter-postgres";
 import {
 	accountStoreContract,
+	grantStoreContract,
 	type StoreClock,
 	tokenStoreContract,
 } from "@vow-auth/store-contracts";
@@ -54,6 +56,10 @@ describe.runIf(databaseUrl !== undefined)("postgres", () => {
 
 	accountStoreContract("postgres", {
 		create: () => createPostgresAccountStore(run),
+	});
+
+	grantStoreContract("postgres", {
+		create: () => createPostgresGrantStore(run),
 	});
 
 	tokenStoreContract("postgres", {

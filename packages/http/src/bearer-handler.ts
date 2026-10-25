@@ -95,6 +95,9 @@ export function createBearerHandler(
 				membership: signedIn.membership,
 				email: signedIn.email,
 			}),
+		sessionAnswer: (session) => session,
+		enteredAnswer: (entered) => entered,
+		replacesSession: false,
 		sessionEnded: () => [],
 	};
 

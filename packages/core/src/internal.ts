@@ -15,6 +15,13 @@ export {
 	type Unsealed,
 } from "./accounts/records.js";
 export { type EvaluatePolicyOptions, evaluatePolicy } from "./decision.js";
+export {
+	createGrants,
+	type Grants,
+	type GrantsOptions,
+	type IssueSessionInput,
+	type OpenSession,
+} from "./grants/grants.js";
 export * from "./index.js";
 export {
 	createLimiter,
@@ -39,8 +46,8 @@ export {
 } from "./sealer.js";
 export { issueSession } from "./session.js";
 export {
-	createSessionTokens,
-	type SessionTokensOptions,
-} from "./session-tokens/session-tokens.js";
-export { createSignIn, type SignInOptions } from "./sign-in.js";
+	createSignIn,
+	createSignInFlow,
+	type SignInOptions,
+} from "./sign-in.js";
 export { createTokens, type TokensOptions } from "./tokens/tokens.js";

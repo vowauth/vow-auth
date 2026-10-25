@@ -1,6 +1,6 @@
 import {
 	createMemoryAccountStore,
-	createMemoryEpochStore,
+	createMemoryGrantStore,
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
@@ -28,6 +28,7 @@ import { expect, test } from "vitest";
 
 const ORIGIN = "https://app.example.com";
 const TENANT = "acme";
+const OTHER_TENANT = "globex";
 const SESSION_COOKIE = "__Host-vow-session";
 const DEVICE_COOKIE = "__Host-vow-device";
 const SECONDS_PER_HOUR = 3_600;
@@ -37,9 +38,11 @@ const SECRETS = [{ version: 1, value: "http-seal-0123456789abcdefghijklmnop" }];
 const accountsWithTenant = (): AccountStore => {
 	const store = createMemoryAccountStore();
 	const records = createRecords(createRecordSeal({ secrets: SECRETS }));
-	const ready = records
-		.tenant({ id: TENANT, disabled: false })
-		.then((tenant) => store.createTenant(tenant));
+	const ready = Promise.all(
+		[TENANT, OTHER_TENANT].map(async (id) =>
+			store.createTenant(await records.tenant({ id, disabled: false })),
+		),
+	);
 	const waiting: Record<string, unknown> = {};
 
 	for (const [name, method] of Object.entries(store)) {
@@ -80,7 +83,7 @@ const createCore = (stepUpSubjects = new Set<string>()) => {
 			totp: factorPluginOf(totpFactor.verify, { providers: ["totp"] }),
 		},
 		accounts: accountsWithTenant(),
-		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
+		grants: createMemoryGrantStore(),
 		tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 		meterStore,
 		secrets: SECRETS,
@@ -180,9 +183,9 @@ test("a browser signs in and gets a cookie, never the token in the body", async 
 		identity: "created",
 		membership: "created",
 	});
-	expect(body.account).toMatch(/^acc_[0-9a-f]{32}$/);
 	expect(body.subject).toMatch(/^sub_[0-9a-f]{32}$/);
 	expect(Object.keys(body)).not.toContain("token");
+	expect(Object.keys(body)).not.toContain("account");
 	expect(JSON.stringify(body)).not.toContain(
 		cookiesOf(response)[SESSION_COOKIE],
 	);
@@ -208,9 +211,75 @@ test("the cookie opens the session, and reading it changes nothing", async () =>
 		get("/session", { cookie: cookieHeader(signedIn) }),
 	);
 
+	const seen = await current.json();
+
 	expect(current.status).toBe(200);
-	expect(await current.json()).toMatchObject({ tenant: TENANT });
+	expect(seen).toMatchObject({ tenant: TENANT, methods: ["claims"] });
+	expect(seen.subject).toMatch(/^sub_/);
+	expect(Object.keys(seen)).not.toContain("account");
 	expect(current.headers.getSetCookie()).toEqual([]);
+});
+
+test("a second sign in of a browser ends the session it had", async () => {
+	const handle = createCookie();
+	const first = await handle(post("/sign-in/claims", signInBody("a@x.test")));
+	const second = await handle(
+		post("/sign-in/claims", signInBody("a@x.test"), {
+			cookie: cookieHeader(first),
+		}),
+	);
+
+	expect(second.status).toBe(200);
+	expect(
+		(await handle(get("/session", { cookie: cookieHeader(first) }))).status,
+	).toBe(401);
+	expect(
+		(await handle(get("/session", { cookie: cookieHeader(second) }))).status,
+	).toBe(200);
+});
+
+test("a browser enters another tenant with the session it has, without a new sign in", async () => {
+	const handle = createCookie({
+		tenant: (request: Request) => request.headers.get("x-tenant") ?? TENANT,
+	});
+	const signedIn = await handle(
+		post("/sign-in/claims", signInBody("a@x.test")),
+	);
+	const cookie = cookieHeader(signedIn);
+	const inOther = { cookie, "x-tenant": OTHER_TENANT };
+
+	expect((await handle(get("/session", inOther))).status).toBe(401);
+
+	const entered = await handle(post("/enter", {}, inOther));
+
+	expect(entered.status).toBe(200);
+	expect(await entered.json()).toEqual({
+		tenant: OTHER_TENANT,
+		subject: expect.stringMatching(/^sub_/),
+		membership: "created",
+	});
+	expect((await handle(get("/session", inOther))).status).toBe(200);
+	expect((await handle(get("/session", { cookie }))).status).toBe(200);
+	expect(
+		(await handle(post("/enter", {}, { "x-tenant": OTHER_TENANT }))).status,
+	).toBe(401);
+});
+
+test("an application on bearer tokens learns the account from its session", async () => {
+	const handle = createBearer();
+	const signedIn = await handle(
+		post("/sign-in/claims", {
+			...signInBody("a@x.test"),
+			device: "d".repeat(32),
+		}),
+	);
+	const { token, account } = await signedIn.json();
+	const current = await handle(
+		get("/session", { authorization: `Bearer ${token}` }),
+	);
+
+	expect(account).toMatch(/^acc_/);
+	expect(await current.json()).toMatchObject({ account, tenant: TENANT });
 });
 
 test("a cookie that is not valid is refused and cleared", async () => {
