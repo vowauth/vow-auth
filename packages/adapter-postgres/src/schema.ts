@@ -1,11 +1,26 @@
-import type { PostgresRunner } from "./postgres-runner.js";
+import {
+	type PostgresRunner,
+	SERVER_NOW_MILLISECONDS,
+} from "./postgres-runner.js";
 
 /**
  * The statements that create the tables of the Postgres stores, one by one,
  * for clients that run a single statement per call. Every statement can be
- * run again: it does nothing when its table or index exists.
+ * run again: it does nothing when its table or index exists. The data of the
+ * application points at a person with a foreign key to
+ * `vow_auth_subjects (id)`; the id is unique across tenants. A subject is never
+ * deleted behind the back of the application: an eviction only sets
+ * `evicted_at_milliseconds`, and the `on delete` rule of the foreign key of the
+ * application decides what an explicit deletion does to its rows.
  */
 export const POSTGRES_SCHEMA_STATEMENTS: readonly string[] = [
+	`create table if not exists vow_auth_subjects (
+	id text primary key,
+	tenant text not null,
+	created_at_milliseconds bigint not null default ${SERVER_NOW_MILLISECONDS},
+	evicted_at_milliseconds bigint,
+	unique (tenant, id)
+)`,
 	`create table if not exists vow_auth_identities (
 	seq bigserial not null,
 	tenant text not null,
@@ -14,7 +29,9 @@ export const POSTGRES_SCHEMA_STATEMENTS: readonly string[] = [
 	subject_id text not null,
 	email text,
 	email_verified boolean not null,
-	primary key (tenant, provider, external_id)
+	primary key (tenant, provider, external_id),
+	foreign key (tenant, subject_id)
+		references vow_auth_subjects (tenant, id) on delete cascade
 )`,
 	`create index if not exists vow_auth_identities_subject
 	on vow_auth_identities (tenant, subject_id)`,

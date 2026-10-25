@@ -163,7 +163,7 @@ window.FLOW_DATA = {
 					"layer": 4,
 					"source": {
 						"file": "packages/core/src/identity/resolve-identity.ts",
-						"line": 46
+						"line": 48
 					}
 				},
 				{
@@ -225,7 +225,7 @@ window.FLOW_DATA = {
 					"layer": 4,
 					"source": {
 						"file": "packages/core/src/identity/mutate-identity.ts",
-						"line": 77
+						"line": 79
 					}
 				},
 				{
@@ -251,7 +251,7 @@ window.FLOW_DATA = {
 					"text": "Субъекты и их идентичности. Атомарно и «первый выигрывает».",
 					"source": {
 						"file": "packages/core/src/identity/identity-store.ts",
-						"line": 12
+						"line": 22
 					}
 				},
 				{
@@ -306,7 +306,7 @@ window.FLOW_DATA = {
 					"text": "Все пять портов, для тестов и разработки на одном экземпляре.",
 					"source": {
 						"file": "packages/adapter-memory/src/memory-identity-store.ts",
-						"line": 26
+						"line": 32
 					}
 				},
 				{
@@ -328,7 +328,7 @@ window.FLOW_DATA = {
 					"text": "Идентичности, токены, outbox. Свой исполнитель запросов.",
 					"source": {
 						"file": "packages/adapter-postgres/src/postgres-identity-store.ts",
-						"line": 67
+						"line": 113
 					}
 				},
 				{
@@ -687,7 +687,7 @@ window.FLOW_DATA = {
 					"audit": "identity.resolve",
 					"source": {
 						"file": "packages/core/src/identity/resolve-identity.ts",
-						"line": 46
+						"line": 48
 					}
 				},
 				{
@@ -699,7 +699,7 @@ window.FLOW_DATA = {
 					"text": "Поиск по паре (provider, externalId) внутри тенанта.",
 					"source": {
 						"file": "packages/core/src/identity/identity-store.ts",
-						"line": 12
+						"line": 22
 					}
 				},
 				{
@@ -722,7 +722,7 @@ window.FLOW_DATA = {
 					"text": "Владелец: самая ранняя идентичность, подтвердившая этот адрес.",
 					"source": {
 						"file": "packages/core/src/identity/identity-store.ts",
-						"line": 12
+						"line": 22
 					}
 				},
 				{
@@ -736,11 +736,26 @@ window.FLOW_DATA = {
 					"title": "Привязать к владельцу",
 					"fn": "IdentityStore.linkIdentity",
 					"port": "IdentityStore.linkIdentity(tenant, subjectId, identity)",
-					"text": "Атомарно и «первый выигрывает»: возвращает субъекта, которому принадлежит идентичность после вызова.",
+					"text": "Атомарно и «первый выигрывает»: возвращает субъекта, которому принадлежит идентичность после вызова. Субъекта не создаёт и не возвращает: если владельца удалили или вытеснили между поиском и привязкой, ответ undefined.",
 					"source": {
 						"file": "packages/core/src/identity/identity-store.ts",
-						"line": 12
+						"line": 22
 					}
+				},
+				{
+					"id": "d-linked",
+					"kind": "decision",
+					"title": "Владелец ещё есть?"
+				},
+				{
+					"id": "link-gone",
+					"kind": "end-fail",
+					"title": "no-subject",
+					"text": "Владельца удалили между поиском и привязкой. Следующий вход не найдёт владельца и создаст субъекта.",
+					"codes": [
+						"no-subject"
+					],
+					"audit": "identity.resolve, reason: not-found"
 				},
 				{
 					"id": "create",
@@ -751,7 +766,7 @@ window.FLOW_DATA = {
 					"text": "Атомарно и «первый выигрывает». Если параллельный вход успел раньше, возвращается его субъект (isNew: false, исход existing).",
 					"source": {
 						"file": "packages/core/src/identity/identity-store.ts",
-						"line": 12
+						"line": 22
 					}
 				},
 				{
@@ -1026,9 +1041,21 @@ window.FLOW_DATA = {
 				},
 				{
 					"from": "link",
-					"to": "resolved",
+					"to": "d-linked",
 					"label": "",
 					"kind": "ok"
+				},
+				{
+					"from": "d-linked",
+					"to": "resolved",
+					"label": "да",
+					"kind": "branch"
+				},
+				{
+					"from": "d-linked",
+					"to": "link-gone",
+					"label": "нет",
+					"kind": "fail"
 				},
 				{
 					"from": "create",
@@ -1228,7 +1255,7 @@ window.FLOW_DATA = {
 					"text": "Только поиск, ничего не создаётся: если идентичность второго фактора не привязана ни к кому, субъекта не появляется.",
 					"source": {
 						"file": "packages/core/src/identity/identity-store.ts",
-						"line": 12
+						"line": 22
 					}
 				},
 				{
@@ -2695,7 +2722,7 @@ window.FLOW_DATA = {
 					"output": "Result<{ affectedSubjects }>",
 					"source": {
 						"file": "packages/core/src/identity/mutate-identity.ts",
-						"line": 77
+						"line": 79
 					}
 				},
 				{
@@ -2740,7 +2767,7 @@ window.FLOW_DATA = {
 					"text": "Удаляет все идентичности субъекта этого тенанта. Чужой тенант не затрагивается. Возвращает false, если такого нет.",
 					"source": {
 						"file": "packages/core/src/identity/identity-store.ts",
-						"line": 12
+						"line": 22
 					}
 				},
 				{
@@ -2800,7 +2827,7 @@ window.FLOW_DATA = {
 					"port": "IdentityStore.findSubjectByVerifiedEmail(tenant, email)",
 					"source": {
 						"file": "packages/core/src/identity/identity-store.ts",
-						"line": 12
+						"line": 22
 					}
 				},
 				{
@@ -2817,7 +2844,7 @@ window.FLOW_DATA = {
 					"port": "IdentityStore.findSubjectsByUnverifiedEmail(tenant, email)",
 					"source": {
 						"file": "packages/core/src/identity/identity-store.ts",
-						"line": 12
+						"line": 22
 					}
 				},
 				{
@@ -2826,7 +2853,7 @@ window.FLOW_DATA = {
 					"title": "Отозвать претендентов",
 					"fn": "revokeUser",
 					"port": "EpochStore.revoke(userKey) для каждого",
-					"text": "До снятия претензий: захватчик теряет сессии прежде, чем исчезнут его данные."
+					"text": "До снятия претензий: захватчик теряет сессии прежде, чем исчезнут его претензии."
 				},
 				{
 					"id": "remove",
@@ -2834,10 +2861,10 @@ window.FLOW_DATA = {
 					"title": "Снять претензии",
 					"fn": "IdentityStore.removeUnverifiedEmailClaims",
 					"port": "IdentityStore.removeUnverifiedEmailClaims(tenant, email, keep)",
-					"text": "Одной операцией: снимает неподтверждённые претензии на адрес у всех, кроме владельца и subject, удаляет субъектов, оставшихся без идентичностей, возвращает затронутых.",
+					"text": "Одной операцией: снимает неподтверждённые претензии на адрес у всех, кроме владельца и subject, помечает вытесненными (evicted_at) субъектов, оставшихся без идентичностей, и возвращает затронутых. Субъект не удаляется: данные приложения, ссылающиеся на него, остаются, а войти в него больше нельзя.",
 					"source": {
 						"file": "packages/core/src/identity/identity-store.ts",
-						"line": 12
+						"line": 22
 					}
 				},
 				{
@@ -4760,7 +4787,7 @@ window.FLOW_DATA = {
 					"title": "createMutateIdentity",
 					"source": {
 						"file": "packages/core/src/identity/mutate-identity.ts",
-						"line": 77
+						"line": 79
 					}
 				},
 				{

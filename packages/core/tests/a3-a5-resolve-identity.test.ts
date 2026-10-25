@@ -73,6 +73,37 @@ test("A3: a verified email links a new provider to the existing subject", async 
 	);
 });
 
+test("A3: a link to an owner deleted in the meantime is refused and never brings the owner back", async () => {
+	const identities = createMemoryIdentityStore();
+	const created = await resolveIdentity(
+		identities,
+		"t1",
+		await emailProof("a@example.com", true),
+	);
+
+	if (!created.ok) {
+		throw new Error("the subject must be created");
+	}
+
+	const owner = created.value.subjectId;
+	const store = {
+		...identities,
+		findSubjectByVerifiedEmail: async () => owner,
+	};
+
+	await identities.deleteSubject("t1", owner);
+
+	const linked = await resolveIdentity(
+		store,
+		"t1",
+		await googleProof("g-1", "a@example.com", true),
+	);
+
+	expect(linked).toEqual({ ok: false, error: "no-subject" });
+	expect(await identities.getSubject("t1", owner)).toBeUndefined();
+	expect(await identities.findSubject("t1", "google", "g-1")).toBeUndefined();
+});
+
 test("A3: an unverified email never links to an existing subject", async () => {
 	const store = createMemoryIdentityStore();
 	const victim = await resolveIdentity(

@@ -70,9 +70,11 @@ type MutationDetail = {
  * - `confirm-email` takes a verified proof of an email that the subject owns
  *   as verified. Every other subject of the tenant that claimed the same
  *   email without verifying it is evicted: their sessions are revoked, the
- *   claims are removed, and subjects left with no identity are deleted. This
- *   ends an account takeover prepared by claiming an address nobody had
- *   proven yet.
+ *   claims are removed, and subjects left with no identity are marked
+ *   evicted: nobody signs in to them again, and the data of the application
+ *   that points at them stays for the application to keep, move or delete.
+ *   This ends an account takeover prepared by claiming an address nobody had
+ *   proven yet, and a row of the application cannot block it.
  */
 export function createMutateIdentity(
 	options: MutateIdentityOptions,

@@ -127,6 +127,17 @@ test("A9: confirming an email evicts the account and sessions that claimed it ea
 	expect(await isValid(squatter.token)).toBe(false);
 	expect(await isValid(victim.token)).toBe(true);
 	expect(await store.findSubject("acme", "evil", "e-1")).toBeUndefined();
+	expect(
+		(await store.getSubject("acme", squatter.subjectId))?.evictedAtMilliseconds,
+	).toEqual(expect.any(Number));
+
+	const returning = await signIn(
+		"acme",
+		await unverifiedClaim("evil", "e-1", "victim@example.com"),
+	);
+
+	expect(returning.subjectId).not.toBe(squatter.subjectId);
+	expect(returning.subjectId).not.toBe(victim.subjectId);
 });
 
 test("A9: a subject with another identity stays, loses only the claim, and loses its sessions", async () => {
@@ -336,7 +347,7 @@ test("changes are recorded, and a failing sink still leaves the change done", as
 	).toEqual([
 		["identity.mutate", "success", "email-confirmed"],
 		["identity.mutate", "refusal", "not-found"],
-		["identity.mutate", "refusal", "not-found"],
+		["identity.mutate", "success", "deleted"],
 	]);
 	expect(records[0]?.detail).toEqual({ change: "confirm-email", evicted: "1" });
 

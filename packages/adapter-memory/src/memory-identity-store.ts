@@ -9,6 +9,11 @@ type Row = {
 	readonly emailVerified: boolean;
 };
 
+type Subject = {
+	readonly tenant: string;
+	evictedAtMilliseconds: number | undefined;
+};
+
 const identityKey = (
 	tenant: string,
 	provider: string,
@@ -17,28 +22,33 @@ const identityKey = (
 
 /**
  * In-process identity store for tests and single-instance development. It
- * keeps one row per identity, in order of arrival, and a subject is the
- * `subjectId` of its rows, exactly as the Postgres store does, so the two
- * answer alike: the owner of a verified email is the oldest identity that
- * verified it, and deleting that identity hands the email to the next one.
- * Lookups by email scan the rows, which is fine at the size of a test.
+ * keeps the subjects and one row per identity, in order of arrival, exactly as
+ * the Postgres store does, so the two answer alike: the owner of a verified
+ * email is the oldest identity that verified it, deleting that identity hands
+ * the email to the next one, and a subject emptied by an eviction stays,
+ * marked evicted. Lookups by email scan the rows, which is fine at the size of
+ * a test.
  */
 export function createMemoryIdentityStore(): IdentityStore {
+	const subjects = new Map<string, Subject>();
 	const rows = new Map<string, Row>();
 
-	const attach = (
+	const liveSubject = (tenant: string, subjectId: string): boolean => {
+		const subject = subjects.get(subjectId);
+
+		return (
+			subject !== undefined &&
+			subject.tenant === tenant &&
+			subject.evictedAtMilliseconds === undefined
+		);
+	};
+
+	const insert = (
 		tenant: string,
 		subjectId: string,
 		identity: IdentityClaims,
-	): string => {
-		const key = identityKey(tenant, identity.provider, identity.externalId);
-		const existing = rows.get(key);
-
-		if (existing !== undefined) {
-			return existing.subjectId;
-		}
-
-		rows.set(key, {
+	): void => {
+		rows.set(identityKey(tenant, identity.provider, identity.externalId), {
 			tenant,
 			provider: identity.provider,
 			externalId: identity.externalId,
@@ -46,9 +56,11 @@ export function createMemoryIdentityStore(): IdentityStore {
 			email: identity.email?.address,
 			emailVerified: identity.emailVerified,
 		});
-
-		return subjectId;
 	};
+
+	const ownerOf = (tenant: string, identity: IdentityClaims) =>
+		rows.get(identityKey(tenant, identity.provider, identity.externalId))
+			?.subjectId;
 
 	const withEmail = (
 		tenant: string,
@@ -65,6 +77,11 @@ export function createMemoryIdentityStore(): IdentityStore {
 	const verifiedOwner = (tenant: string, address: string) =>
 		withEmail(tenant, address, true)[0]?.subjectId;
 
+	const hasIdentity = (tenant: string, subjectId: string): boolean =>
+		Array.from(rows.values()).some(
+			(row) => row.tenant === tenant && row.subjectId === subjectId,
+		);
+
 	return {
 		async findSubject(tenant, provider, externalId) {
 			return rows.get(identityKey(tenant, provider, externalId))?.subjectId;
@@ -73,13 +90,42 @@ export function createMemoryIdentityStore(): IdentityStore {
 			return verifiedOwner(tenant, email.address);
 		},
 		async createSubject(tenant, identity) {
-			const subjectId = crypto.randomUUID();
-			const owner = attach(tenant, subjectId, identity);
+			const existing = ownerOf(tenant, identity);
 
-			return { subjectId: owner, isNew: owner === subjectId };
+			if (existing !== undefined) {
+				return { subjectId: existing, isNew: false };
+			}
+
+			const subjectId = crypto.randomUUID();
+
+			subjects.set(subjectId, { tenant, evictedAtMilliseconds: undefined });
+			insert(tenant, subjectId, identity);
+
+			return { subjectId, isNew: true };
 		},
 		async linkIdentity(tenant, subjectId, identity) {
-			return attach(tenant, subjectId, identity);
+			const existing = ownerOf(tenant, identity);
+
+			if (existing !== undefined) {
+				return existing;
+			}
+
+			if (!liveSubject(tenant, subjectId)) {
+				return undefined;
+			}
+
+			insert(tenant, subjectId, identity);
+
+			return subjectId;
+		},
+		async getSubject(tenant, subjectId) {
+			const subject = subjects.get(subjectId);
+
+			if (subject === undefined || subject.tenant !== tenant) {
+				return undefined;
+			}
+
+			return { evictedAtMilliseconds: subject.evictedAtMilliseconds };
 		},
 		async findSubjectsByUnverifiedEmail(tenant, email) {
 			return Array.from(
@@ -98,19 +144,35 @@ export function createMemoryIdentityStore(): IdentityStore {
 				rows.delete(identityKey(row.tenant, row.provider, row.externalId));
 			}
 
-			return Array.from(new Set(claims.map((row) => row.subjectId)));
+			const touched = Array.from(new Set(claims.map((row) => row.subjectId)));
+			const now = Date.now();
+
+			for (const subjectId of touched) {
+				const subject = subjects.get(subjectId);
+
+				if (subject !== undefined && !hasIdentity(tenant, subjectId)) {
+					subject.evictedAtMilliseconds ??= now;
+				}
+			}
+
+			return touched;
 		},
 		async deleteSubject(tenant, subjectId) {
-			let deleted = false;
+			const subject = subjects.get(subjectId);
+
+			if (subject === undefined || subject.tenant !== tenant) {
+				return false;
+			}
+
+			subjects.delete(subjectId);
 
 			for (const [key, row] of rows) {
 				if (row.tenant === tenant && row.subjectId === subjectId) {
 					rows.delete(key);
-					deleted = true;
 				}
 			}
 
-			return deleted;
+			return true;
 		},
 	};
 }

@@ -77,13 +77,13 @@ export const identity = flow(
 		node("revoke-early", "port", "Отозвать претендентов", {
 			fn: "revokeUser",
 			port: "EpochStore.revoke(userKey) для каждого",
-			text: "До снятия претензий: захватчик теряет сессии прежде, чем исчезнут его данные.",
+			text: "До снятия претензий: захватчик теряет сессии прежде, чем исчезнут его претензии.",
 		}),
 		node("remove", "port", "Снять претензии", {
 			fn: "IdentityStore.removeUnverifiedEmailClaims",
 			where: `${IDENTITY_STORE}#export type IdentityStore`,
 			port: "IdentityStore.removeUnverifiedEmailClaims(tenant, email, keep)",
-			text: "Одной операцией: снимает неподтверждённые претензии на адрес у всех, кроме владельца и subject, удаляет субъектов, оставшихся без идентичностей, возвращает затронутых.",
+			text: "Одной операцией: снимает неподтверждённые претензии на адрес у всех, кроме владельца и subject, помечает вытесненными (evicted_at) субъектов, оставшихся без идентичностей, и возвращает затронутых. Субъект не удаляется: данные приложения, ссылающиеся на него, остаются, а войти в него больше нельзя.",
 		}),
 		node("revoke-late", "port", "Отозвать опоздавших", {
 			fn: "revokeUser",

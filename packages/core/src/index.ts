@@ -23,7 +23,10 @@ export {
 	type CanonicalEmail,
 	canonicalizeEmail,
 } from "./identity/canonical-email.js";
-export type { IdentityStore } from "./identity/identity-store.js";
+export type {
+	IdentityStore,
+	StoredSubject,
+} from "./identity/identity-store.js";
 export {
 	IDENTITY_CHANGE_TYPES,
 	type IdentityChange,

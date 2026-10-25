@@ -51,8 +51,10 @@ const uniqueTenant = (): string => `tenant-${crypto.randomUUID()}`;
 /**
  * Defines the tests every `IdentityStore` must pass: the first writer of an
  * identity wins, a tenant never reaches another tenant, unverified claims are
- * kept apart from the verified owner of an email, and deleting a subject
- * leaves nothing that finds it. Call it inside a test file once per adapter.
+ * kept apart from the verified owner of an email, an eviction keeps the
+ * subject and marks it, an identity never brings a subject back, and deleting
+ * a subject leaves nothing that finds it. Call it inside a test file once per
+ * adapter.
  */
 export function identityStoreContract(
 	name: string,
@@ -75,6 +77,12 @@ export function identityStoreContract(
 					emailOf("alice@example.com"),
 				),
 			).toBe(created.subjectId);
+			expect(await store.getSubject(tenant, created.subjectId)).toEqual({
+				evictedAtMilliseconds: undefined,
+			});
+			expect(
+				await store.getSubject(uniqueTenant(), created.subjectId),
+			).toBeUndefined();
 			expect(await store.findSubject(tenant, "email", "bob")).toBeUndefined();
 			expect(
 				await store.findSubject(tenant, "github", "alice"),
@@ -126,6 +134,51 @@ export function identityStoreContract(
 					verified("google", "g-1", "alice@example.com"),
 				),
 			).toBe(alice.subjectId);
+		});
+
+		test("linking never creates a subject, nor brings a deleted one back", async () => {
+			const store = await options.create();
+			const tenant = uniqueTenant();
+			const alice = await store.createSubject(
+				tenant,
+				verified("email", "alice", "alice@example.com"),
+			);
+			const missing = crypto.randomUUID();
+
+			expect(
+				await store.linkIdentity(
+					tenant,
+					missing,
+					verified("google", "g-1", "nobody@example.com"),
+				),
+			).toBeUndefined();
+			expect(await store.findSubject(tenant, "google", "g-1")).toBeUndefined();
+			expect(await store.getSubject(tenant, missing)).toBeUndefined();
+			expect(
+				await store.linkIdentity(
+					uniqueTenant(),
+					alice.subjectId,
+					verified("google", "g-2", "alice@example.com"),
+				),
+			).toBeUndefined();
+			expect(
+				await store.linkIdentity(
+					tenant,
+					missing,
+					verified("email", "alice", "alice@example.com"),
+				),
+			).toBe(alice.subjectId);
+
+			await store.deleteSubject(tenant, alice.subjectId);
+
+			expect(
+				await store.linkIdentity(
+					tenant,
+					alice.subjectId,
+					verified("google", "g-3", "alice@example.com"),
+				),
+			).toBeUndefined();
+			expect(await store.getSubject(tenant, alice.subjectId)).toBeUndefined();
 		});
 
 		test("the first verified owner of an email keeps it", async () => {
@@ -232,7 +285,7 @@ export function identityStoreContract(
 			).toEqual([]);
 		});
 
-		test("removing unverified claims spares the kept subject and the verified owner, and deletes the emptied ones", async () => {
+		test("removing unverified claims spares the kept subject and the verified owner, and marks the emptied ones evicted", async () => {
 			const store = await options.create();
 			const tenant = uniqueTenant();
 			const address = "victim@example.com";
@@ -276,6 +329,55 @@ export function identityStoreContract(
 			expect(await store.findSubjectsByUnverifiedEmail(tenant, email)).toEqual(
 				[],
 			);
+			expect(
+				(await store.getSubject(tenant, squatter.subjectId))
+					?.evictedAtMilliseconds,
+			).toEqual(expect.any(Number));
+			expect(await store.getSubject(tenant, mixed.subjectId)).toEqual({
+				evictedAtMilliseconds: undefined,
+			});
+			expect(await store.getSubject(tenant, owner.subjectId)).toEqual({
+				evictedAtMilliseconds: undefined,
+			});
+		});
+
+		test("an evicted subject keeps its mark, takes no identity and can be deleted", async () => {
+			const store = await options.create();
+			const tenant = uniqueTenant();
+			const address = "victim@example.com";
+			const email = emailOf(address);
+			const squatter = await store.createSubject(
+				tenant,
+				unverified("evil", "e-1", address),
+			);
+			const owner = await store.createSubject(
+				tenant,
+				verified("email", "victim", address),
+			);
+
+			await store.removeUnverifiedEmailClaims(tenant, email, owner.subjectId);
+
+			const evicted = await store.getSubject(tenant, squatter.subjectId);
+
+			expect(
+				await store.linkIdentity(
+					tenant,
+					squatter.subjectId,
+					verified("google", "g-1", "evil@example.com"),
+				),
+			).toBeUndefined();
+			expect(await store.findSubject(tenant, "google", "g-1")).toBeUndefined();
+
+			await store.createSubject(tenant, unverified("evil", "e-2", address));
+			await store.removeUnverifiedEmailClaims(tenant, email, owner.subjectId);
+
+			expect(await store.getSubject(tenant, squatter.subjectId)).toEqual(
+				evicted,
+			);
+			expect(await store.deleteSubject(tenant, squatter.subjectId)).toBe(true);
+			expect(
+				await store.getSubject(tenant, squatter.subjectId),
+			).toBeUndefined();
 			expect(await store.deleteSubject(tenant, squatter.subjectId)).toBe(false);
 		});
 
@@ -298,6 +400,9 @@ export function identityStoreContract(
 			expect(await store.findSubject(acme, "evil", "e-1")).toBe(
 				squatter.subjectId,
 			);
+			expect(await store.getSubject(acme, squatter.subjectId)).toEqual({
+				evictedAtMilliseconds: undefined,
+			});
 		});
 
 		test("deleting a subject leaves nothing that finds it", async () => {
@@ -315,6 +420,7 @@ export function identityStoreContract(
 			);
 
 			expect(await store.deleteSubject(tenant, alice.subjectId)).toBe(true);
+			expect(await store.getSubject(tenant, alice.subjectId)).toBeUndefined();
 			expect(await store.findSubject(tenant, "email", "alice")).toBeUndefined();
 			expect(await store.findSubject(tenant, "github", "gh-1")).toBeUndefined();
 			expect(

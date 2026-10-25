@@ -41,7 +41,9 @@ export type ResolveIdentityOptions = {
  * account. The email in a proof is already canonical, `verifyProof` made it
  * so. A link is recorded in the audit before it is made, so a failing sink
  * prevents it; a new subject is recorded right after it is created, and a
- * failing sink then leaves a subject that nothing uses.
+ * failing sink then leaves a subject that nothing uses. When the owner is
+ * deleted between finding it and linking to it, the link is refused rather
+ * than bringing the subject back, and the next sign-in creates a subject.
  */
 export async function resolveIdentity(
 	store: IdentityStore,
@@ -109,6 +111,17 @@ export async function resolveIdentity(
 			);
 
 			const subjectId = await store.linkIdentity(tenant, owner, identity);
+
+			if (subjectId === undefined) {
+				await record(
+					AUDIT_OUTCOMES.refusal,
+					AUDIT_REASONS.notFound,
+					owner,
+					identity.provider,
+				);
+
+				return fail(ERROR_CODES.noSubject);
+			}
 
 			return succeed({ subjectId, outcome: RESOLUTION_OUTCOMES.linked });
 		}
