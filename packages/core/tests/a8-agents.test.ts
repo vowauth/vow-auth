@@ -329,7 +329,10 @@ test("A8: an agent token expires by the delegation's life time", async () => {
 
 test("A8: an agent chain of an unknown shape is rejected", async () => {
 	const { auth } = createFixture();
-	const sealer = createSealer({ secrets: [{ version: 1, value: SECRET }] });
+	const sealer = createSealer({
+		secrets: [{ version: 1, value: SECRET }],
+		domain: "core",
+	});
 	const link = (scope: string, id: string) => ({
 		scope,
 		id,

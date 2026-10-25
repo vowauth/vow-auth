@@ -10,7 +10,11 @@ export {
 export * from "./index.js";
 export { createMeter, type MeterOptions } from "./meter/meter.js";
 export { type VerifyProofOptions, verifyProof } from "./proof.js";
-export { createSealer, type SealerOptions } from "./sealer.js";
+export {
+	createSealer,
+	type SealDomain,
+	type SealerOptions,
+} from "./sealer.js";
 export { issueSession } from "./session.js";
 export {
 	createSessionTokens,

@@ -27,8 +27,18 @@ export type SealerOptions = {
 	 * characters long, for example `openssl rand -base64 32`.
 	 */
 	readonly secrets: readonly SecretVersion[];
+	/**
+	 * Whose values these are. The domain is part of every key, so a value of
+	 * one domain never unseals in another whatever its purpose: the
+	 * application cannot seal a value that the core takes for its own.
+	 * `application` when left out.
+	 */
+	readonly domain?: SealDomain | undefined;
 	readonly audit?: AuditSink | undefined;
 };
+
+/** The owners of sealed values and one-time tokens: the core itself, or the application and its factors. */
+export type SealDomain = "core" | "application";
 
 /** Parameters of a value to seal. */
 export type SealInput = {
@@ -151,6 +161,7 @@ const randomBytes = (length: number): Uint8Array<ArrayBuffer> => {
 const deriveMessageKey = (
 	secretKey: CryptoKey,
 	salt: Uint8Array<ArrayBuffer>,
+	domain: SealDomain,
 	purpose: string,
 ): Promise<CryptoKey> => {
 	return crypto.subtle.deriveKey(
@@ -158,7 +169,7 @@ const deriveMessageKey = (
 			name: "HKDF",
 			hash: "SHA-256",
 			salt,
-			info: encoder.encode(KEY_DERIVATION_LABEL + purpose),
+			info: encoder.encode(`${KEY_DERIVATION_LABEL}${domain}/${purpose}`),
 		},
 		secretKey,
 		{ name: "AES-GCM", length: 256 },
@@ -207,8 +218,9 @@ const requireValidSecrets = (
 
 /**
  * Creates the sealer. Every value gets its own AES-256-GCM key, derived with
- * HKDF from the current secret, a random salt and the purpose, so a value
- * sealed for one purpose never unseals for another and the number of sealed
+ * HKDF from the current secret, a random salt, the domain and the purpose, so
+ * a value sealed for one purpose or domain never unseals for another and the
+ * number of sealed
  * values per secret has no nonce limit. Every rejection reports the same
  * `invalid-seal` error; the audit records why: malformed, unknown secret
  * version, undecryptable (wrong purpose, wrong secret or tampered) or expired.
@@ -217,6 +229,7 @@ export function createSealer(options: SealerOptions): Sealer {
 	const { secrets } = options;
 
 	const audit = own(options, "audit");
+	const domain = own(options, "domain") ?? "application";
 
 	const currentSecret = requireValidSecrets(secrets);
 	const currentKey = importSecret(currentSecret.value);
@@ -249,6 +262,7 @@ export function createSealer(options: SealerOptions): Sealer {
 				await deriveMessageKey(
 					await secretKey,
 					bytes.slice(0, SALT_BYTES),
+					domain,
 					purpose,
 				),
 				bytes.slice(SALT_BYTES + INITIALIZATION_VECTOR_BYTES),
@@ -284,7 +298,7 @@ export function createSealer(options: SealerOptions): Sealer {
 
 			const ciphertext = await crypto.subtle.encrypt(
 				{ name: "AES-GCM", iv: initializationVector },
-				await deriveMessageKey(await currentKey, salt, input.purpose),
+				await deriveMessageKey(await currentKey, salt, domain, input.purpose),
 				encoder.encode(JSON.stringify(contents)),
 			);
 

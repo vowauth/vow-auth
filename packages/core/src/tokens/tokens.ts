@@ -9,6 +9,7 @@ import {
 import { type Duration, isDuration } from "../duration.js";
 import { ERROR_CODES } from "../errors.js";
 import { fail, type Result, succeed } from "../result.js";
+import type { SealDomain } from "../sealer.js";
 import { SECRET_LENGTH } from "../shared/constants.js";
 import { own } from "../shared/own.js";
 import { generateSecret, hashSecret } from "../shared/secret.js";
@@ -18,6 +19,13 @@ import type { TokenStore } from "./token-store.js";
 /** Options for creating the tokens primitive. */
 export type TokensOptions = {
 	readonly store: TokenStore;
+	/**
+	 * Whose tokens these are. The domain is stored with the purpose, so a
+	 * token of one domain is never redeemed in another: the application cannot
+	 * issue a token that the core takes for its own. `application` when left
+	 * out.
+	 */
+	readonly domain?: SealDomain | undefined;
 	readonly audit?: AuditSink | undefined;
 };
 
@@ -51,6 +59,8 @@ export type Tokens = {
  */
 export function createTokens(options: TokensOptions): Tokens {
 	const audit = own(options, "audit");
+	const domain = own(options, "domain") ?? "application";
+	const stored = (purpose: string): string => `${domain}/${purpose}`;
 
 	const record = (
 		event: string,
@@ -89,7 +99,7 @@ export function createTokens(options: TokensOptions): Tokens {
 
 			try {
 				await options.store.put(await hashSecret(token), {
-					purpose: input.purpose,
+					purpose: stored(input.purpose),
 					payload: own(input, "payload") ?? {},
 					expiresAtMilliseconds: Date.now() + input.timeToLive.milliseconds,
 				});
@@ -120,17 +130,17 @@ export function createTokens(options: TokensOptions): Tokens {
 				return refuse(AUDIT_REASONS.malformed, purpose);
 			}
 
-			const stored = await options.store.take(await hashSecret(token));
+			const taken = await options.store.take(await hashSecret(token));
 
-			if (stored === undefined) {
+			if (taken === undefined) {
 				return refuse(AUDIT_REASONS.notFound, purpose);
 			}
 
-			if (stored.purpose !== purpose) {
+			if (taken.purpose !== stored(purpose)) {
 				return refuse(AUDIT_REASONS.wrongPurpose, purpose);
 			}
 
-			if (!(Date.now() < stored.expiresAtMilliseconds)) {
+			if (!(Date.now() < taken.expiresAtMilliseconds)) {
 				return refuse(AUDIT_REASONS.expired, purpose);
 			}
 
@@ -141,7 +151,7 @@ export function createTokens(options: TokensOptions): Tokens {
 				purpose,
 			);
 
-			return succeed(stored.payload);
+			return succeed(taken.payload);
 		},
 	};
 }

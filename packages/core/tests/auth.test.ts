@@ -9,7 +9,9 @@ import {
 	type AuditSink,
 	type AuthOptions,
 	createAuth,
+	defineDuration,
 	type Factor,
+	requireFactor,
 	succeed,
 } from "@vow-auth/core";
 import { durationOf, meterRuleOf } from "@vow-auth/test-support";
@@ -133,4 +135,91 @@ test("the sessions part can check and revoke but not issue", () => {
 	const auth = createAuth(optionsWith(async () => undefined));
 
 	expect(Object.keys(auth.sessions).sort()).toEqual(["revoke", "verify"]);
+});
+
+const hour = () => {
+	const duration = defineDuration(3_600_000);
+
+	if (!duration.ok) {
+		throw new Error("an hour is a valid duration");
+	}
+
+	return duration.value;
+};
+
+test("what the application seals never opens as a session, however it is shaped", async () => {
+	const auth = createAuth(optionsWith(async () => undefined));
+	const now = Date.now();
+	const future = now + 10 ** 12;
+	const forged = await auth.sealer.seal({
+		purpose: "session",
+		payload: {
+			chain: JSON.stringify([
+				{ scope: "tenant", id: "acme", stamp: future },
+				{ scope: "user", id: "anyone", stamp: future },
+				{ scope: "device", id: "laptop", stamp: future },
+				{ scope: "session", id: "s-1", stamp: future },
+			]),
+			expiresAtMilliseconds: String(now + 3_600_000),
+			authenticatedAtMilliseconds: String(now),
+			methods: JSON.stringify(["totp"]),
+		},
+		timeToLive: hour(),
+	});
+	const agent = await auth.sealer.seal({
+		purpose: "agent",
+		payload: {
+			chain: JSON.stringify([
+				{ scope: "tenant", id: "acme", stamp: future },
+				{ scope: "user", id: "anyone", stamp: future },
+				{ scope: "agent", id: "bot", stamp: future },
+				{ scope: "delegation", id: "d-1", stamp: future },
+			]),
+			expiresAtMilliseconds: String(now + 3_600_000),
+			delegatedAtMilliseconds: String(now),
+		},
+		timeToLive: hour(),
+	});
+
+	expect(await auth.sessions.verify(forged)).toEqual({
+		ok: false,
+		error: "invalid-session",
+	});
+	expect(await auth.agents.verify(agent)).toEqual({
+		ok: false,
+		error: "invalid-session",
+	});
+});
+
+test("a token the application issues never continues a sign in", async () => {
+	const records: AuditRecord[] = [];
+	const auth = createAuth({
+		...optionsWith(async (record) => {
+			records.push(record);
+		}),
+		stepUpTimeToLiveMilliseconds: 60_000,
+		policy: () => requireFactor("email"),
+	});
+	const forged = await auth.tokens.issue({
+		purpose: "sign-in-continuation",
+		payload: { tenant: "acme", device: "laptop", factor: "email" },
+		timeToLive: hour(),
+	});
+
+	records.length = 0;
+
+	expect(
+		await auth.signIn({
+			tenant: "acme",
+			device: "laptop",
+			factor: emailFactor,
+			response: undefined,
+			continuation: forged,
+		}),
+	).toEqual({ ok: false, error: "invalid-token" });
+	expect(records[0]).toMatchObject({
+		event: "token.consume",
+		outcome: "refusal",
+		reason: "wrong-purpose",
+	});
 });

@@ -64,9 +64,17 @@ export type Auth = {
 	readonly agents: Pick<SessionTokens, "delegate"> & {
 		readonly verify: SessionTokens["verifyAgent"];
 	};
-	/** One-time secrets bound to a purpose, for factors such as an email link. */
+	/**
+	 * One-time secrets bound to a purpose, for factors such as an email link.
+	 * They live in the application's domain: a token issued here is never
+	 * taken for one of the core, such as the continuation of a sign in.
+	 */
 	readonly tokens: Tokens;
-	/** Seals short-lived values such as an OAuth state. */
+	/**
+	 * Seals short-lived values such as an OAuth state. It seals in the
+	 * application's domain: whatever it seals never opens as a session or an
+	 * agent token, whatever the purpose.
+	 */
 	readonly sealer: Sealer;
 	/** Counts requests against limits shared by every instance. */
 	readonly meter: Meter;
@@ -101,7 +109,7 @@ export function createAuth(options: AuthOptions): Auth {
 	const meter = createMeter({ store: options.meterStore, audit });
 
 	const sessionTokens = createSessionTokens({
-		sealer,
+		sealer: createSealer({ secrets: options.secrets, domain: "core", audit }),
 		epochs: options.epochs,
 		maximumLifeTimeMilliseconds: options.maximumLifeTimeMilliseconds,
 		audit,
@@ -117,7 +125,7 @@ export function createAuth(options: AuthOptions): Auth {
 		identities: options.identities,
 		sessionTokens,
 		mutateIdentity,
-		tokens,
+		tokens: createTokens({ store: options.tokenStore, domain: "core", audit }),
 		policy: options.policy,
 		sessionTimeToLiveMilliseconds: options.sessionTimeToLiveMilliseconds,
 		stepUpTimeToLiveMilliseconds: options.stepUpTimeToLiveMilliseconds,

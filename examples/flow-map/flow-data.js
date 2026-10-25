@@ -71,7 +71,7 @@ window.FLOW_DATA = {
 					},
 					"source": {
 						"file": "packages/core/src/auth.ts",
-						"line": 82
+						"line": 90
 					}
 				},
 				{
@@ -195,7 +195,7 @@ window.FLOW_DATA = {
 					"layer": 5,
 					"source": {
 						"file": "packages/core/src/sealer.ts",
-						"line": 216
+						"line": 228
 					}
 				},
 				{
@@ -205,7 +205,7 @@ window.FLOW_DATA = {
 					"layer": 4,
 					"source": {
 						"file": "packages/core/src/tokens/tokens.ts",
-						"line": 52
+						"line": 60
 					}
 				},
 				{
@@ -931,7 +931,7 @@ window.FLOW_DATA = {
 					},
 					"source": {
 						"file": "packages/core/src/sealer.ts",
-						"line": 272
+						"line": 286
 					}
 				},
 				{
@@ -2198,7 +2198,7 @@ window.FLOW_DATA = {
 					"audit": "seal.unseal (отказ)",
 					"source": {
 						"file": "packages/core/src/sealer.ts",
-						"line": 299
+						"line": 313
 					}
 				},
 				{
@@ -3020,7 +3020,7 @@ window.FLOW_DATA = {
 					"output": "секрет (строка)",
 					"source": {
 						"file": "packages/core/src/tokens/tokens.ts",
-						"line": 83
+						"line": 93
 					}
 				},
 				{
@@ -3086,7 +3086,7 @@ window.FLOW_DATA = {
 					"output": "Result<payload>",
 					"source": {
 						"file": "packages/core/src/tokens/tokens.ts",
-						"line": 118
+						"line": 128
 					}
 				},
 				{
@@ -3459,7 +3459,7 @@ window.FLOW_DATA = {
 					"output": "«версия.base64url»",
 					"source": {
 						"file": "packages/core/src/sealer.ts",
-						"line": 272
+						"line": 286
 					}
 				},
 				{
@@ -3502,7 +3502,7 @@ window.FLOW_DATA = {
 					"output": "Result<payload>",
 					"source": {
 						"file": "packages/core/src/sealer.ts",
-						"line": 299
+						"line": 313
 					}
 				},
 				{
@@ -4714,7 +4714,7 @@ window.FLOW_DATA = {
 					"output": "Auth",
 					"source": {
 						"file": "packages/core/src/auth.ts",
-						"line": 82
+						"line": 90
 					}
 				},
 				{
@@ -4749,7 +4749,7 @@ window.FLOW_DATA = {
 					"throws": "RangeError",
 					"source": {
 						"file": "packages/core/src/sealer.ts",
-						"line": 216
+						"line": 228
 					}
 				},
 				{
@@ -4758,7 +4758,7 @@ window.FLOW_DATA = {
 					"title": "createTokens",
 					"source": {
 						"file": "packages/core/src/tokens/tokens.ts",
-						"line": 52
+						"line": 60
 					}
 				},
 				{
