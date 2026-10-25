@@ -1,17 +1,18 @@
 import {
 	applyLimit,
-	assertLimit,
+	assertLimitRule,
 	canonicalizeEmail,
 	type Duration,
 	EMAIL_PROVIDER,
 	ERROR_CODES,
-	type Factor,
+	type FactorPlugin,
 	fail,
 	type Limit,
+	type LimitRule,
 	type MeterRefusal,
+	NO_LIMIT,
 	type Result,
 	succeed,
-	type Tokens,
 } from "@vow-auth/core";
 
 const EMAIL_LINK_PURPOSE = "email-link";
@@ -24,7 +25,6 @@ export type EmailLinkMessage = {
 
 /** Options for creating the email link factor. */
 export type EmailLinkOptions = {
-	readonly tokens: Tokens;
 	/**
 	 * Delivers the link. Keep it short: enqueue the message instead of calling
 	 * a mail provider inside the request. A thrown error reaches the caller of
@@ -36,90 +36,96 @@ export type EmailLinkOptions = {
 	/**
 	 * How often a link may be sent to one address. Asking for a link costs
 	 * nothing for an anonymous caller and reaches a stranger's mailbox, so the
-	 * answer is required: a limiter made with `createLimiter`, or `"off"`
-	 * when the caller limits it already.
+	 * answer is required: a rule and the scopes to count, or `"off"` when the
+	 * caller limits it already. The engine counts it in its meter store.
 	 */
-	readonly limit: Limit<{ readonly email: string }>;
+	readonly limit: LimitRule<{ readonly email: string }> | typeof NO_LIMIT;
 };
 
-/** A passwordless sign-in by a link sent to an email address. */
+/** What the application may call on the email link factor. */
 export type EmailLink = {
-	/** Proves possession of the mailbox; pass it to `verifyProof` with the token from the link. */
-	readonly factor: Factor;
 	/**
 	 * Sends a link to the address. The answer does not depend on whether the
 	 * address belongs to a known subject, so it reveals nothing about accounts.
+	 * The link goes to the mailbox only: nobody else ever holds the token.
 	 */
 	challenge(email: string): Promise<Result<undefined, string | MeterRefusal>>;
 };
 
 /**
- * Creates the email link factor. The token is bound to the canonical address
- * and to the purpose `email-link`, so it opens nothing else, and it is
- * redeemed once. The factor only proves ownership of the mailbox; it never
- * creates a session or links an account.
+ * Creates the email link factor, to give to `createAuth`. The token is issued
+ * with the tokens of this factor alone, bound to the canonical address and
+ * redeemed once, so nothing but a link from the mailbox opens it. The factor
+ * only proves ownership of the mailbox and claims identities of the provider
+ * `email`; it never creates a session or links an account.
  */
-export function createEmailLink(options: EmailLinkOptions): EmailLink {
-	assertLimit("limit", options.limit);
+export function createEmailLink(
+	options: EmailLinkOptions,
+): FactorPlugin<EmailLink> {
+	assertLimitRule("limit", options.limit);
 
 	return {
-		factor: {
-			id: EMAIL_LINK_PURPOSE,
-			strength: "possession",
-			async verify(response) {
-				if (typeof response !== "string") {
-					return fail(ERROR_CODES.invalidToken);
-				}
+		strength: "possession",
+		providers: [EMAIL_PROVIDER],
+		create({ tokens, createLimiter }) {
+			const limit: Limit<{ readonly email: string }> =
+				options.limit === NO_LIMIT ? NO_LIMIT : createLimiter(options.limit);
 
-				const consumed = await options.tokens.consume(
-					response,
-					EMAIL_LINK_PURPOSE,
-				);
+			return {
+				async verify(response) {
+					if (typeof response !== "string") {
+						return fail(ERROR_CODES.invalidToken);
+					}
 
-				if (!consumed.ok) {
-					return consumed;
-				}
+					const consumed = await tokens.consume(response, EMAIL_LINK_PURPOSE);
 
-				const email = Object.hasOwn(consumed.value, "email")
-					? consumed.value.email
-					: undefined;
+					if (!consumed.ok) {
+						return consumed;
+					}
 
-				if (email === undefined) {
-					return fail(ERROR_CODES.invalidToken);
-				}
+					const email = Object.hasOwn(consumed.value, "email")
+						? consumed.value.email
+						: undefined;
 
-				return succeed({
-					provider: EMAIL_PROVIDER,
-					externalId: email,
-					email,
-					emailVerified: true,
-				});
-			},
-		},
-		async challenge(email) {
-			const canonical = canonicalizeEmail(email);
+					if (email === undefined) {
+						return fail(ERROR_CODES.invalidToken);
+					}
 
-			if (canonical === undefined) {
-				return fail(ERROR_CODES.invalidEmail);
-			}
+					return succeed({
+						provider: EMAIL_PROVIDER,
+						externalId: email,
+						email,
+						emailVerified: true,
+					});
+				},
+				api: {
+					async challenge(email) {
+						const canonical = canonicalizeEmail(email);
 
-			const allowed = await applyLimit(options.limit, {
-				email: canonical.address,
-			});
+						if (canonical === undefined) {
+							return fail(ERROR_CODES.invalidEmail);
+						}
 
-			if (!allowed.ok) {
-				return fail(allowed.error);
-			}
+						const allowed = await applyLimit(limit, {
+							email: canonical.address,
+						});
 
-			const token = await options.tokens.issue({
-				purpose: EMAIL_LINK_PURPOSE,
-				payload: { email: canonical.address },
-				timeToLive: options.timeToLive,
-			});
+						if (!allowed.ok) {
+							return fail(allowed.error);
+						}
 
-			await options.deliver({ email: canonical.address, token });
+						const token = await tokens.issue({
+							purpose: EMAIL_LINK_PURPOSE,
+							payload: { email: canonical.address },
+							timeToLive: options.timeToLive,
+						});
 
-			return succeed(undefined);
+						await options.deliver({ email: canonical.address, token });
+
+						return succeed(undefined);
+					},
+				},
+			};
 		},
 	};
 }

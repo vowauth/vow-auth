@@ -45,6 +45,8 @@ export type SignInPolicyInput = {
 
 /** Options for creating the sign-in flow. */
 export type SignInOptions = {
+	/** The factors of the engine by id; a sign in names one of them. */
+	readonly factors: ReadonlyMap<string, Factor>;
 	readonly identities: IdentityStore;
 	readonly sessionTokens: Pick<SessionTokens, "issue">;
 	readonly mutateIdentity: MutateIdentity;
@@ -68,7 +70,8 @@ export type SignInOptions = {
 export type SignInRequest = {
 	readonly tenant: string;
 	readonly device: string;
-	readonly factor: Factor;
+	/** The id of a factor the engine was created with; a sign in cannot bring its own. */
+	readonly factor: string;
 	readonly response: unknown;
 	/** The `continuation` of a `step-up-required` refusal, when this is its second step. */
 	readonly continuation?: string;
@@ -152,7 +155,8 @@ const parseEvicted = (
 };
 
 /**
- * Creates the sign-in flow, the only road to a session: prove with a factor,
+ * Creates the sign-in flow, the only road to a session: prove with a factor
+ * of the engine, named by its id,
  * resolve the identity, confirm a verified email against earlier claims, ask
  * the policy, then issue the session and its token. Every factor, present and
  * future, takes the same road, so a new factor is under the same policy,
@@ -172,6 +176,7 @@ const parseEvicted = (
  */
 export function createSignIn(options: SignInOptions): SignIn {
 	const {
+		factors,
 		identities,
 		sessionTokens,
 		mutateIdentity,
@@ -298,9 +303,10 @@ export function createSignIn(options: SignInOptions): SignIn {
 
 	const firstStep = async (
 		request: SignInRequest,
+		factor: Factor,
 	): Promise<Result<SignedIn, SignInRefusal>> => {
 		const { tenant, device } = request;
-		const proof = await verifyProof(request.factor, request.response, {
+		const proof = await verifyProof(factor, request.response, {
 			audit,
 			context: { tenant, proofs: [] },
 		});
@@ -347,9 +353,10 @@ export function createSignIn(options: SignInOptions): SignIn {
 
 	const secondStep = async (
 		request: SignInRequest,
+		factor: Factor,
 		continuation: string,
 	): Promise<Result<SignedIn, SignInRefusal>> => {
-		const { tenant, device, factor } = request;
+		const { tenant, device } = request;
 		const spent = await tokens.consume(continuation, CONTINUATION_PURPOSE);
 
 		if (!spent.ok) {
@@ -419,17 +426,22 @@ export function createSignIn(options: SignInOptions): SignIn {
 	return async (request) => {
 		const { tenant, device } = request;
 		const continuation = own(request, "continuation");
+		const factor =
+			typeof request.factor === "string"
+				? factors.get(request.factor)
+				: undefined;
 
 		if (
 			!isStorableText(tenant) ||
 			!isStorableText(device) ||
-			(continuation !== undefined && !isStorableText(continuation))
+			(continuation !== undefined && !isStorableText(continuation)) ||
+			factor === undefined
 		) {
 			return fail(ERROR_CODES.invalidRequest);
 		}
 
 		return continuation === undefined
-			? firstStep(request)
-			: secondStep(request, continuation);
+			? firstStep(request, factor)
+			: secondStep(request, factor, continuation);
 	};
 }

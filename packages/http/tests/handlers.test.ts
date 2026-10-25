@@ -17,7 +17,7 @@ import {
 	createCookieHandler,
 	type LimitInput,
 } from "@vow-auth/http";
-import { meterRuleOf } from "@vow-auth/test-support";
+import { factorPluginOf, meterRuleOf } from "@vow-auth/test-support";
 import { expect, test } from "vitest";
 
 const ORIGIN = "https://app.example.com";
@@ -48,6 +48,10 @@ const claims = (email: string) => ({
 const createCore = (stepUpSubjects = new Set<string>()) => {
 	const meterStore = createMemoryMeterStore({ maximumBytes: 1_000_000 });
 	const auth: Auth = createAuth({
+		factors: {
+			claims: factorPluginOf(claimsFactor.verify, { providers: ["email"] }),
+			totp: factorPluginOf(totpFactor.verify, { providers: ["totp"] }),
+		},
 		identities: createMemoryIdentityStore(),
 		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
 		tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
@@ -68,7 +72,6 @@ const createCore = (stepUpSubjects = new Set<string>()) => {
 };
 
 const shared = {
-	factors: { claims: claimsFactor, totp: totpFactor },
 	tenant: TENANT,
 	basePath: "/auth",
 	maximumBodyBytes: 4_096,

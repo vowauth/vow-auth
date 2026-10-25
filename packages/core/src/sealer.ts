@@ -29,16 +29,16 @@ export type SealerOptions = {
 	readonly secrets: readonly SecretVersion[];
 	/**
 	 * Whose values these are. The domain is part of every key, so a value of
-	 * one domain never unseals in another whatever its purpose: the
-	 * application cannot seal a value that the core takes for its own.
-	 * `application` when left out.
+	 * one domain never unseals in another whatever its purpose: a factor
+	 * cannot seal a value that the core or another factor takes for its own.
+	 * `core` when left out.
 	 */
 	readonly domain?: SealDomain | undefined;
 	readonly audit?: AuditSink | undefined;
 };
 
-/** The owners of sealed values and one-time tokens: the core itself, or the application and its factors. */
-export type SealDomain = "core" | "application";
+/** The owners of sealed values and one-time tokens: the core itself, or one factor. */
+export type SealDomain = "core" | `factor:${string}`;
 
 /** Parameters of a value to seal. */
 export type SealInput = {
@@ -229,7 +229,7 @@ export function createSealer(options: SealerOptions): Sealer {
 	const { secrets } = options;
 
 	const audit = own(options, "audit");
-	const domain = own(options, "domain") ?? "application";
+	const domain = own(options, "domain") ?? "core";
 
 	const currentSecret = requireValidSecrets(secrets);
 	const currentKey = importSecret(currentSecret.value);

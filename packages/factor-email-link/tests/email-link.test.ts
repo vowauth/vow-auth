@@ -4,6 +4,7 @@ import {
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
+import { createAuth } from "@vow-auth/core";
 import {
 	createLimiter,
 	createMeter,
@@ -11,32 +12,70 @@ import {
 	createSessionTokens,
 	createTokens,
 	evaluatePolicy,
+	type Factor,
 	issueSession,
 	resolveIdentity,
+	type Tokens,
 	verifyProof,
 } from "@vow-auth/core/internal";
 import {
 	createEmailLink,
 	type EmailLinkMessage,
+	type EmailLinkOptions,
 } from "@vow-auth/factor-email-link";
 import { durationOf, meterRuleOf } from "@vow-auth/test-support";
 import { expect, test } from "vitest";
 
 const FIFTEEN_MINUTES = 15 * 60 * 1_000;
+const SECRET = "email-link-secret-0123456789abcdefghij";
+
+/** Creates the factor the way the engine does, with capabilities of its own. */
+const startEmailLink = (
+	options: EmailLinkOptions,
+	tokens: Tokens = createTokens({
+		store: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
+		domain: "factor:email-link",
+	}),
+) => {
+	const plugin = createEmailLink(options);
+	const meter = createMeter({
+		store: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
+	});
+	const instance = plugin.create({
+		tokens,
+		sealer: createSealer({
+			secrets: [{ version: 1, value: SECRET }],
+			domain: "factor:email-link",
+		}),
+		createLimiter: (limiterOptions) =>
+			createLimiter({ ...limiterOptions, meter }),
+	});
+	const factor: Factor = {
+		id: "email-link",
+		strength: plugin.strength,
+		providers: plugin.providers,
+		verify: instance.verify,
+	};
+
+	return { factor, challenge: instance.api.challenge };
+};
 
 const createFixture = () => {
 	const sent: EmailLinkMessage[] = [];
 	const tokens = createTokens({
 		store: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
+		domain: "factor:email-link",
 	});
-	const emailLink = createEmailLink({
-		tokens,
-		deliver: async (message) => {
-			sent.push(message);
+	const emailLink = startEmailLink(
+		{
+			deliver: async (message) => {
+				sent.push(message);
+			},
+			timeToLive: durationOf(FIFTEEN_MINUTES),
+			limit: "off",
 		},
-		timeToLive: durationOf(FIFTEEN_MINUTES),
-		limit: "off",
-	});
+		tokens,
+	);
 	const identities = createMemoryIdentityStore();
 	const sessionTokens = createSessionTokens({
 		sealer: createSealer({
@@ -207,10 +246,7 @@ test("the answer does not depend on whether the subject is known", async () => {
 });
 
 test("a failing delivery reaches the caller", async () => {
-	const emailLink = createEmailLink({
-		tokens: createTokens({
-			store: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
-		}),
+	const emailLink = startEmailLink({
 		deliver: async () => {
 			throw new Error("mail is down");
 		},
@@ -223,14 +259,9 @@ test("a failing delivery reaches the caller", async () => {
 	);
 });
 
-const limitedEmailLink = (
-	limit: Parameters<typeof createEmailLink>[0]["limit"],
-) => {
+const limitedEmailLink = (limit: EmailLinkOptions["limit"]) => {
 	const sent: EmailLinkMessage[] = [];
-	const emailLink = createEmailLink({
-		tokens: createTokens({
-			store: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
-		}),
+	const emailLink = startEmailLink({
 		deliver: async (message) => {
 			sent.push(message);
 		},
@@ -242,18 +273,12 @@ const limitedEmailLink = (
 };
 
 test("links to one address are limited, and spelling variants of it share the count", async () => {
-	const meter = createMeter({
-		store: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
+	const { emailLink, sent } = limitedEmailLink({
+		rule: meterRuleOf({ limit: 2, windowMilliseconds: 60_000 }),
+		scopes: ({ email }) => [
+			{ tenant: "acme", actor: email, resource: "email-link" },
+		],
 	});
-	const { emailLink, sent } = limitedEmailLink(
-		createLimiter({
-			meter,
-			rule: meterRuleOf({ limit: 2, windowMilliseconds: 60_000 }),
-			scopes: ({ email }) => [
-				{ tenant: "acme", actor: email, resource: "email-link" },
-			],
-		}),
-	);
 
 	expect((await emailLink.challenge("alice@example.com")).ok).toBe(true);
 	expect((await emailLink.challenge("ALICE@Example.com")).ok).toBe(true);
@@ -266,18 +291,12 @@ test("links to one address are limited, and spelling variants of it share the co
 });
 
 test("an address that is refused costs no limit and sends nothing", async () => {
-	const meter = createMeter({
-		store: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
+	const { emailLink, sent } = limitedEmailLink({
+		rule: meterRuleOf({ limit: 1, windowMilliseconds: 60_000 }),
+		scopes: ({ email }) => [
+			{ tenant: "acme", actor: email, resource: "email-link" },
+		],
 	});
-	const { emailLink, sent } = limitedEmailLink(
-		createLimiter({
-			meter,
-			rule: meterRuleOf({ limit: 1, windowMilliseconds: 60_000 }),
-			scopes: ({ email }) => [
-				{ tenant: "acme", actor: email, resource: "email-link" },
-			],
-		}),
-	);
 
 	for (const address of [
 		"not an address",
@@ -297,6 +316,59 @@ test("an address that is refused costs no limit and sends nothing", async () => 
 
 test("a forgotten limit stops the start", () => {
 	// @ts-expect-error the limit is required
-	expect(() => limitedEmailLink(undefined)).toThrow(/limit must be a limiter/);
+	expect(() => limitedEmailLink(undefined)).toThrow(
+		/limit must be a rule with scopes/,
+	);
 	expect(() => limitedEmailLink("off")).not.toThrow();
+});
+
+test("through the engine a link signs in, and a token from anywhere else does not", async () => {
+	const sent: EmailLinkMessage[] = [];
+	const tokenStore = createMemoryTokenStore({ maximumBytes: 1_000_000 });
+	const auth = createAuth({
+		identities: createMemoryIdentityStore(),
+		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
+		tokenStore,
+		meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
+		secrets: [{ version: 1, value: SECRET }],
+		factors: {
+			"email-link": createEmailLink({
+				deliver: async (message) => {
+					sent.push(message);
+				},
+				timeToLive: durationOf(FIFTEEN_MINUTES),
+				limit: "off",
+			}),
+		},
+		maximumLifeTimeMilliseconds: FIFTEEN_MINUTES,
+		sessionTimeToLiveMilliseconds: FIFTEEN_MINUTES,
+		policy: () => "allow",
+		audit: async () => undefined,
+	});
+	const signIn = (response: string) =>
+		auth.signIn({
+			tenant: "acme",
+			device: "laptop",
+			factor: "email-link",
+			response,
+		});
+
+	expect(
+		(await auth.factors["email-link"].challenge("alice@example.com")).ok,
+	).toBe(true);
+	expect((await signIn(lastToken(sent))).ok).toBe(true);
+
+	const elsewhere = await createTokens({
+		store: tokenStore,
+		domain: "factor:other",
+	}).issue({
+		purpose: "email-link",
+		payload: { email: "victim@example.com" },
+		timeToLive: durationOf(FIFTEEN_MINUTES),
+	});
+
+	expect(await signIn(elsewhere)).toEqual({
+		ok: false,
+		error: "invalid-proof",
+	});
 });

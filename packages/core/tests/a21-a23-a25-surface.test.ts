@@ -5,13 +5,8 @@ import {
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
 import * as core from "@vow-auth/core";
-import {
-	type AuthOptions,
-	createAuth,
-	type Factor,
-	succeed,
-} from "@vow-auth/core";
-import { durationOf } from "@vow-auth/test-support";
+import { type AuthOptions, createAuth, succeed } from "@vow-auth/core";
+import { factorPluginOf } from "@vow-auth/test-support";
 import { expect, test } from "vitest";
 
 const LIFE_TIME = 60_000;
@@ -34,6 +29,18 @@ const optionsOf = (): AuthOptions => ({
 	tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 	meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
 	secrets: [{ version: 1, value: "surface-secret-0123456789abcdefghijklm" }],
+	factors: {
+		frozen: factorPluginOf(async () =>
+			succeed(
+				deepFreeze({
+					provider: "email",
+					externalId: "alice@example.com",
+					email: "alice@example.com",
+					emailVerified: true,
+				}),
+			),
+		),
+	},
 	maximumLifeTimeMilliseconds: LIFE_TIME,
 	sessionTimeToLiveMilliseconds: LIFE_TIME,
 	policy: () => "allow",
@@ -54,6 +61,7 @@ test("A21, A25: the public surface is exactly this, so a new export or a weakeni
 		"RESOLUTION_OUTCOMES",
 		"applyLimit",
 		"assertLimit",
+		"assertLimitRule",
 		"canonicalizeEmail",
 		"createAuth",
 		"createRedirectPolicy",
@@ -74,6 +82,7 @@ test("A21, A25: the public surface is exactly this, so a new export or a weakeni
 		tokenStore: true,
 		meterStore: true,
 		secrets: true,
+		factors: true,
 		maximumLifeTimeMilliseconds: true,
 		sessionTimeToLiveMilliseconds: true,
 		stepUpTimeToLiveMilliseconds: true,
@@ -81,7 +90,7 @@ test("A21, A25: the public surface is exactly this, so a new export or a weakeni
 		audit: true,
 	} satisfies Record<keyof AuthOptions, true>;
 
-	expect(Object.keys(optionKeys)).toHaveLength(10);
+	expect(Object.keys(optionKeys)).toHaveLength(11);
 });
 
 test("A25: an unknown option is a compile error, not silence", () => {
@@ -95,51 +104,18 @@ test("A25: an unknown option is a compile error, not silence", () => {
 });
 
 test("A23: the core never changes what it is given", async () => {
-	const factor: Factor = deepFreeze({
-		id: "frozen-factor",
-		strength: "possession",
-		verify: async () =>
-			succeed(
-				deepFreeze({
-					provider: "email",
-					externalId: "alice@example.com",
-					email: "alice@example.com",
-					emailVerified: true,
-				}),
-			),
-	});
 	const auth = createAuth(deepFreeze(optionsOf()));
 
 	const signedIn = await auth.signIn(
 		deepFreeze({
 			tenant: "acme",
 			device: "laptop",
-			factor,
+			factor: "frozen",
 			response: { nested: { value: "x" } },
 		}),
 	);
 
 	expect(signedIn.ok).toBe(true);
-
-	const link = await auth.tokens.issue(
-		deepFreeze({
-			purpose: "email-link",
-			payload: { email: "alice@example.com" },
-			timeToLive: durationOf(1_000),
-		}),
-	);
-
-	expect((await auth.tokens.consume(link, "email-link")).ok).toBe(true);
-
-	const sealed = await auth.sealer.seal(
-		deepFreeze({
-			purpose: "oauth-state",
-			payload: { state: "abc" },
-			timeToLive: durationOf(1_000),
-		}),
-	);
-
-	expect((await auth.sealer.unseal(sealed, "oauth-state")).ok).toBe(true);
 
 	if (signedIn.ok) {
 		expect(

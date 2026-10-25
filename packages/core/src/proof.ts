@@ -56,6 +56,13 @@ export type Proof = {
 export type Factor = {
 	readonly id: string;
 	readonly strength: ProofStrength;
+	/**
+	 * The providers whose identities the factor may claim; a claim of any
+	 * other provider is refused, unless it repeats exactly the claims of a
+	 * proof already passed in this sign in, as a second factor does. The
+	 * engine always sets it, from the plugin the factor was created from.
+	 */
+	readonly providers?: readonly string[] | undefined;
 	verify(response: unknown, context: FactorContext): Promise<Result<unknown>>;
 };
 
@@ -194,6 +201,23 @@ export async function verifyProof(
 	}
 
 	const claims = parsed.value;
+
+	const context = own(options, "context") ?? NO_CONTEXT;
+	const repeatsEarlierProof = context.proofs.some(
+		(earlier) =>
+			earlier.claims.provider === claims.provider &&
+			earlier.claims.externalId === claims.externalId &&
+			earlier.claims.emailVerified === claims.emailVerified &&
+			earlier.claims.email?.address === claims.email?.address,
+	);
+
+	if (
+		factor.providers !== undefined &&
+		!factor.providers.includes(claims.provider) &&
+		!repeatsEarlierProof
+	) {
+		return refuse(AUDIT_REASONS.foreignProvider);
+	}
 
 	await report(audit, {
 		event: AUDIT_EVENTS.proofVerify,

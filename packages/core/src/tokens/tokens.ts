@@ -21,9 +21,9 @@ export type TokensOptions = {
 	readonly store: TokenStore;
 	/**
 	 * Whose tokens these are. The domain is stored with the purpose, so a
-	 * token of one domain is never redeemed in another: the application cannot
-	 * issue a token that the core takes for its own. `application` when left
-	 * out.
+	 * token of one domain is never redeemed in another: a factor cannot issue
+	 * a token that the core or another factor takes for its own. `core` when
+	 * left out.
 	 */
 	readonly domain?: SealDomain | undefined;
 	readonly audit?: AuditSink | undefined;
@@ -59,7 +59,7 @@ export type Tokens = {
  */
 export function createTokens(options: TokensOptions): Tokens {
 	const audit = own(options, "audit");
-	const domain = own(options, "domain") ?? "application";
+	const domain = own(options, "domain") ?? "core";
 	const stored = (purpose: string): string => `${domain}/${purpose}`;
 
 	const record = (

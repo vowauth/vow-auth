@@ -53,6 +53,24 @@ export function createLimiter<Input>(
 	};
 }
 
+/** A limit as a factor asks for it: the rule and what to count. The engine makes the limiter. */
+export type LimitRule<Input> = Omit<LimiterOptions<Input>, "meter">;
+
+/** Throws a `TypeError` when a limit is neither a rule with scopes nor `"off"`, so a forgotten option stops the start. */
+export function assertLimitRule(name: string, limit: unknown): void {
+	if (
+		limit !== NO_LIMIT &&
+		(typeof limit !== "object" ||
+			limit === null ||
+			typeof Reflect.get(limit, "scopes") !== "function" ||
+			typeof Reflect.get(limit, "rule") !== "object")
+	) {
+		throw new TypeError(
+			`${name} must be a rule with scopes, or "${NO_LIMIT}" to say that there is no limit`,
+		);
+	}
+}
+
 /** Throws a `TypeError` when a limit is neither a limiter nor `"off"`, so a forgotten option stops the start. */
 export function assertLimit(name: string, limit: unknown): void {
 	if (limit !== NO_LIMIT && typeof limit !== "function") {

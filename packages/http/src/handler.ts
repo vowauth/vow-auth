@@ -2,7 +2,6 @@ import {
 	type Auth,
 	applyLimit,
 	assertLimit,
-	type Factor,
 	type Limit,
 	type MeterRefusal,
 	type Result,
@@ -26,9 +25,8 @@ export type Challenge = (
 
 /** Options that both handlers share. */
 export type HandlerOptions = {
-	readonly auth: Pick<Auth, "signIn" | "sessions">;
-	/** The factors a person can sign in with, by id: the id is the last part of `/sign-in/<id>`. */
-	readonly factors: Readonly<Record<string, Factor>>;
+	/** The engine; a person signs in with its factors, by id: the last part of `/sign-in/<id>`. */
+	readonly auth: Pick<Auth, "signIn" | "sessions" | "factors">;
 	/** The factors that start with a challenge, by id: the last part of `/challenge/<id>`. */
 	readonly challenges?: Readonly<Record<string, Challenge>>;
 	/** The tenant of a request: a fixed one, or one chosen by the host or path. */
@@ -232,7 +230,7 @@ export function createHandler(
 	options: HandlerOptions,
 	mode: Mode,
 ): (request: Request) => Promise<Response> {
-	const { auth, factors, challenges = {}, maximumBodyBytes, limit } = options;
+	const { auth, challenges = {}, maximumBodyBytes, limit } = options;
 	const basePath = options.basePath ?? "";
 	const fixedTenant = options.tenant;
 	const tenantOf =
@@ -278,11 +276,8 @@ export function createHandler(
 		body: Readonly<Record<string, unknown>>,
 	): Promise<Response> => {
 		const tenant = tenantOf(request);
-		const factor = Object.hasOwn(factors, factorId)
-			? factors[factorId]
-			: undefined;
 
-		if (tenant === undefined || factor === undefined) {
+		if (tenant === undefined || !Object.hasOwn(auth.factors, factorId)) {
 			return refusalAnswer("invalid-request");
 		}
 
@@ -312,7 +307,7 @@ export function createHandler(
 		const result = await auth.signIn({
 			tenant,
 			device: choice.device,
-			factor,
+			factor: factorId,
 			response: body.response,
 			...(typeof continuation === "string" ? { continuation } : {}),
 		});

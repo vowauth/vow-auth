@@ -4,14 +4,8 @@ import {
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
-import {
-	createAuth,
-	type Factor,
-	fail,
-	type IdentityStore,
-	succeed,
-} from "@vow-auth/core";
-import { durationOf } from "@vow-auth/test-support";
+import { createAuth, fail, type IdentityStore, succeed } from "@vow-auth/core";
+import { durationOf, factorPluginOf } from "@vow-auth/test-support";
 import fastCheck from "fast-check";
 import { expect, test } from "vitest";
 
@@ -33,10 +27,8 @@ const spyOn = <Store extends object>(store: Store, calls: string[]): Store => {
 	return spied;
 };
 
-const claimsFactor = (claims: unknown): Factor => ({
-	id: "claims",
-	strength: "possession",
-	verify: async () => succeed(claims),
+const claimsFactor = factorPluginOf(async (claims) => succeed(claims), {
+	providers: ["idp"],
 });
 
 const goodClaims = {
@@ -49,6 +41,10 @@ const createFixture = () => {
 	const calls: string[] = [];
 	const identities: IdentityStore = spyOn(createMemoryIdentityStore(), calls);
 	const auth = createAuth({
+		factors: {
+			claims: claimsFactor,
+			failing: factorPluginOf(async () => fail("x")),
+		},
 		identities,
 		epochs: spyOn(createMemoryEpochStore({ maximumBytes: 1_000_000 }), calls),
 		tokenStore: spyOn(
@@ -94,8 +90,8 @@ test("a name with a control character or a lone surrogate stops at the border, b
 			const request = {
 				tenant: "acme",
 				device: "laptop",
-				factor: claimsFactor(goodClaims),
-				response: {},
+				factor: "claims",
+				response: goodClaims,
 			};
 
 			expect(await auth.signIn({ ...request, tenant: bad })).toEqual({
@@ -113,13 +109,13 @@ test("a name with a control character or a lone surrogate stops at the border, b
 			expect(
 				await auth.signIn({
 					...request,
-					factor: claimsFactor({ ...goodClaims, provider: bad }),
+					response: { ...goodClaims, provider: bad },
 				}),
 			).toEqual({ ok: false, error: "invalid-proof" });
 			expect(
 				await auth.signIn({
 					...request,
-					factor: claimsFactor({ ...goodClaims, externalId: bad }),
+					response: { ...goodClaims, externalId: bad },
 				}),
 			).toEqual({ ok: false, error: "invalid-proof" });
 			expect(
@@ -145,8 +141,8 @@ test("an agent whose name cannot be stored is refused before anything is written
 	const signedIn = await auth.signIn({
 		tenant: "acme",
 		device: "laptop",
-		factor: claimsFactor(goodClaims),
-		response: {},
+		factor: "claims",
+		response: goodClaims,
 	});
 
 	if (!signedIn.ok) {
@@ -183,8 +179,8 @@ test("names that people really use are accepted", async () => {
 		const result = await auth.signIn({
 			tenant: name,
 			device: name,
-			factor: claimsFactor({ ...goodClaims, externalId: name }),
-			response: {},
+			factor: "claims",
+			response: { ...goodClaims, externalId: name },
 		});
 
 		expect(result.ok, name).toBe(true);
@@ -198,11 +194,7 @@ test("a name that cannot be stored never reaches a store through a failing facto
 		await auth.signIn({
 			tenant: "acme\u0000",
 			device: "laptop",
-			factor: {
-				id: "f",
-				strength: "possession",
-				verify: async () => fail("x"),
-			},
+			factor: "failing",
 			response: {},
 		}),
 	).toEqual({ ok: false, error: "invalid-request" });

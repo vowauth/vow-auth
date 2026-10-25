@@ -13,6 +13,7 @@ import {
 	type SignInPolicyInput,
 	succeed,
 } from "@vow-auth/core";
+import { factorPluginOf } from "@vow-auth/test-support";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 const MINUTE = 60_000;
@@ -80,8 +81,20 @@ const createFixture = (options: Options = {}) => {
 	const identities = createMemoryIdentityStore();
 	const records: AuditRecord[] = [];
 	const seen: SignInPolicyInput[] = [];
+	const contexts: unknown[] = [];
+	const watched =
+		(factor: Factor): Factor["verify"] =>
+		(response, context) => {
+			contexts.push(context);
+
+			return factor.verify(response, context);
+		};
 	const protectedSubjects = new Set<string>();
 	const auth = createAuth({
+		factors: {
+			email: factorPluginOf(watched(emailFactor), { providers: ["email"] }),
+			totp: factorPluginOf(watched(totpFactor), { providers: ["totp"] }),
+		},
 		identities,
 		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
 		tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
@@ -115,7 +128,7 @@ const createFixture = (options: Options = {}) => {
 		const first = await auth.signIn({
 			tenant,
 			device: "enrolling",
-			factor: emailFactor,
+			factor: "email",
 			response: { email: address },
 		});
 
@@ -133,7 +146,7 @@ const createFixture = (options: Options = {}) => {
 		return first.value.subject;
 	};
 
-	return { auth, identities, records, seen, enroll };
+	return { auth, contexts, identities, records, seen, enroll };
 };
 
 const stepUpOf = (result: {
@@ -164,7 +177,7 @@ const firstStep = (
 	auth.signIn({
 		tenant: "acme",
 		device: "laptop",
-		factor: emailFactor,
+		factor: "email",
 		response: { email: address },
 	});
 
@@ -191,7 +204,7 @@ test("A2: the second factor completes the sign in, and the policy sees every pro
 	const done = await auth.signIn({
 		tenant: "acme",
 		device: "laptop",
-		factor: totpFactor,
+		factor: "totp",
 		response: { user: "alice-totp", code: GOOD_CODE },
 		continuation: challenge.continuation,
 	});
@@ -214,7 +227,7 @@ test("A2: the session records the factors that were passed and when, and the age
 	const done = await auth.signIn({
 		tenant: "acme",
 		device: "laptop",
-		factor: totpFactor,
+		factor: "totp",
 		response: { user: "alice-totp", code: GOOD_CODE },
 		continuation: challenge.continuation,
 	});
@@ -264,14 +277,14 @@ test("A2: a continuation is spent by the first try, so a wrong code burns it", a
 	const wrong = await auth.signIn({
 		tenant: "acme",
 		device: "laptop",
-		factor: totpFactor,
+		factor: "totp",
 		response: { user: "alice-totp", code: "000000" },
 		continuation,
 	});
 	const retry = await auth.signIn({
 		tenant: "acme",
 		device: "laptop",
-		factor: totpFactor,
+		factor: "totp",
 		response: { user: "alice-totp", code: GOOD_CODE },
 		continuation,
 	});
@@ -291,7 +304,7 @@ test("A2: a continuation cannot be used twice, also not at the same moment", asy
 			auth.signIn({
 				tenant: "acme",
 				device: "laptop",
-				factor: totpFactor,
+				factor: "totp",
 				response: { user: "alice-totp", code: GOOD_CODE },
 				continuation,
 			}),
@@ -314,7 +327,7 @@ test("A2: a continuation expires", async () => {
 		await auth.signIn({
 			tenant: "acme",
 			device: "laptop",
-			factor: totpFactor,
+			factor: "totp",
 			response: { user: "alice-totp", code: GOOD_CODE },
 			continuation,
 		}),
@@ -327,9 +340,9 @@ test("A2: a continuation belongs to its tenant, device and factor, and is burned
 	await enroll("alice-totp", "alice@example.com");
 
 	const mismatches = [
-		{ tenant: "globex", device: "laptop", factor: totpFactor },
-		{ tenant: "acme", device: "phone", factor: totpFactor },
-		{ tenant: "acme", device: "laptop", factor: emailFactor },
+		{ tenant: "globex", device: "laptop", factor: "totp" },
+		{ tenant: "acme", device: "phone", factor: "totp" },
+		{ tenant: "acme", device: "laptop", factor: "email" },
 	];
 
 	for (const mismatch of mismatches) {
@@ -346,7 +359,7 @@ test("A2: a continuation belongs to its tenant, device and factor, and is burned
 		const again = await auth.signIn({
 			tenant: "acme",
 			device: "laptop",
-			factor: totpFactor,
+			factor: "totp",
 			response: { user: "alice-totp", code: GOOD_CODE },
 			continuation,
 		});
@@ -366,7 +379,7 @@ test("A2: the second factor must belong to the same subject, and an unknown one 
 	const crossed = await auth.signIn({
 		tenant: "acme",
 		device: "laptop",
-		factor: totpFactor,
+		factor: "totp",
 		response: { user: "bob-totp", code: GOOD_CODE },
 		continuation,
 	});
@@ -382,7 +395,7 @@ test("A2: the second factor must belong to the same subject, and an unknown one 
 	const stranger = await auth.signIn({
 		tenant: "acme",
 		device: "laptop",
-		factor: totpFactor,
+		factor: "totp",
 		response: { user: "mallory-totp", code: GOOD_CODE },
 		continuation: second.continuation,
 	});
@@ -459,7 +472,7 @@ test("A2: a request that carries an empty or non-text continuation is refused at
 			await auth.signIn({
 				tenant: "acme",
 				device: "laptop",
-				factor: totpFactor,
+				factor: "totp",
 				response: { user: "alice-totp", code: GOOD_CODE },
 				// @ts-expect-error a continuation that is not text
 				continuation,
@@ -487,7 +500,7 @@ test("A2: the second step must use the factor that was asked for, not the first 
 		await auth.signIn({
 			tenant: "acme",
 			device: "laptop",
-			factor: emailFactor,
+			factor: "email",
 			response: { email: "alice@example.com" },
 			continuation,
 		}),
@@ -495,23 +508,15 @@ test("A2: the second step must use the factor that was asked for, not the first 
 });
 
 test("the first step gives a factor the tenant and nothing else, the second the subject and the proofs so far", async () => {
-	const { auth, enroll } = createFixture();
+	const { auth, contexts, enroll } = createFixture();
 	const subject = await enroll("alice-totp", "alice@example.com");
-	const contexts: unknown[] = [];
-	const watching = (factor: Factor): Factor => ({
-		...factor,
-		verify: async (response, context) => {
-			contexts.push(context);
 
-			return factor.verify(response, context);
-		},
-	});
-
+	contexts.length = 0;
 	const challenge = stepUpOf(
 		await auth.signIn({
 			tenant: "acme",
 			device: "laptop",
-			factor: watching(emailFactor),
+			factor: "email",
 			response: { email: "alice@example.com" },
 		}),
 	);
@@ -519,7 +524,7 @@ test("the first step gives a factor the tenant and nothing else, the second the 
 	await auth.signIn({
 		tenant: "acme",
 		device: "laptop",
-		factor: watching(totpFactor),
+		factor: "totp",
 		response: { user: "alice-totp", code: GOOD_CODE },
 		continuation: challenge.continuation,
 	});

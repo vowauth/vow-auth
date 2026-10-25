@@ -1,15 +1,17 @@
 import {
 	applyLimit,
-	assertLimit,
+	assertLimitRule,
 	type Duration,
 	ERROR_CODES,
-	type Factor,
+	type FactorContext,
+	type FactorPlugin,
 	fail,
 	type Limit,
+	type LimitRule,
 	type MeterRefusal,
+	NO_LIMIT,
 	type Proof,
 	type Result,
-	type Sealer,
 	succeed,
 } from "@vow-auth/core";
 import { generateBackupCodes, hashBackupCode } from "./backup-codes.js";
@@ -17,7 +19,7 @@ import { decodeBase32, encodeBase32 } from "./base32.js";
 import { DIGITS, findStep, PERIOD_SECONDS, SECRET_BYTES } from "./otp.js";
 import type { TotpStore } from "./store.js";
 
-const TOTP_FACTOR_ID = "totp";
+const TOTP_PROVIDER = "totp";
 const SECRET_PURPOSE = "totp-secret";
 const NO_STEP_YET = -1;
 const ALGORITHM_NAME = "SHA1";
@@ -32,8 +34,6 @@ export type TotpLimitInput = {
 /** Options for creating the TOTP factor. */
 export type TotpOptions = {
 	readonly store: TotpStore;
-	/** Seals the secrets, so the store never holds one in the clear. */
-	readonly sealer: Sealer;
 	/** The name an app shows next to the code, such as the name of your service. */
 	readonly issuer: string;
 	/**
@@ -44,10 +44,11 @@ export type TotpOptions = {
 	readonly secretTimeToLive: Duration;
 	/**
 	 * How often codes may be tried for one subject. Six digits are guessable,
-	 * so the answer is required: a limiter made with `createLimiter`, or
-	 * `"off"` when something in front limits it already.
+	 * so the answer is required: a rule and the scopes to count, or `"off"`
+	 * when something in front limits it already. The engine counts it in its
+	 * meter store.
 	 */
-	readonly limit: Limit<TotpLimitInput>;
+	readonly limit: LimitRule<TotpLimitInput> | typeof NO_LIMIT;
 	readonly now?: () => number;
 };
 
@@ -59,14 +60,13 @@ export type TotpEnrollment = {
 	readonly uri: string;
 };
 
-/** The second factor: a code from an authenticator app, or a one-time backup code. */
+/**
+ * What the application may call on the TOTP factor. The factor itself signs
+ * in the second step of a step-up: the response is `{ code }` or
+ * `{ backupCode }`. It can only follow another factor: the person is the
+ * subject that factor identified, never one the client names.
+ */
 export type Totp = {
-	/**
-	 * Pass it to `signIn` in the second step of a step-up. The response is
-	 * `{ code }` or `{ backupCode }`. It can only follow another factor: the
-	 * person is the subject that factor identified, never one the client names.
-	 */
-	readonly factor: Factor;
 	/** Starts an enrollment for a signed-in subject. Starting again before confirming replaces the secret; a confirmed enrollment must be removed first. */
 	begin(input: {
 		readonly tenant: string;
@@ -123,192 +123,211 @@ const sameIdentity = (proof: Proof | undefined) => {
  * one step of drift either way, the one setting every authenticator app
  * understands. A code is accepted once: the step it came from becomes the
  * lowest the next code may come from, and the store has to make that atomic.
+ * The secrets are sealed with the sealer of this factor alone, so the store
+ * never holds one in the clear and no other part can open one.
  */
-export function createTotp(options: TotpOptions): Totp {
-	assertLimit("limit", options.limit);
+export function createTotp(options: TotpOptions): FactorPlugin<Totp> {
+	assertLimitRule("limit", options.limit);
 
-	const { store, sealer, issuer } = options;
+	const { store, issuer } = options;
 	const now = options.now ?? Date.now;
 
 	if (issuer === "" || issuer.includes(":")) {
 		throw new RangeError("issuer must be a name without a colon");
 	}
 
-	const openSecret = async (
-		tenant: string,
-		subject: string,
-		sealed: string,
-	): Promise<Uint8Array<ArrayBuffer> | undefined> => {
-		const opened = await sealer.unseal(sealed, SECRET_PURPOSE);
-
-		if (
-			!opened.ok ||
-			opened.value.tenant !== tenant ||
-			opened.value.subject !== subject
-		) {
-			return undefined;
-		}
-
-		return decodeBase32(opened.value.secret ?? "");
-	};
-
-	const newBackupCodes = async () => {
-		const codes = generateBackupCodes();
-
-		return {
-			codes,
-			hashes: await Promise.all(codes.map((code) => hashBackupCode(code))),
-		};
-	};
-
-	const factor: Factor = {
-		id: TOTP_FACTOR_ID,
+	return {
 		strength: "possession",
-		async verify(response, context) {
-			const { tenant, subject } = context;
-			const claims = sameIdentity(context.proofs[0]);
+		providers: [TOTP_PROVIDER],
+		create({ sealer, createLimiter }) {
+			const limit: Limit<TotpLimitInput> =
+				options.limit === NO_LIMIT ? NO_LIMIT : createLimiter(options.limit);
 
-			if (subject === undefined || claims === undefined) {
-				return fail(ERROR_CODES.invalidProof);
-			}
+			const openSecret = async (
+				tenant: string,
+				subject: string,
+				sealed: string,
+			): Promise<Uint8Array<ArrayBuffer> | undefined> => {
+				const opened = await sealer.unseal(sealed, SECRET_PURPOSE);
 
-			const allowed = await applyLimit(options.limit, {
-				tenant,
-				subject,
-				action: "verify",
-			});
+				if (
+					!opened.ok ||
+					opened.value.tenant !== tenant ||
+					opened.value.subject !== subject
+				) {
+					return undefined;
+				}
 
-			if (!allowed.ok) {
-				return fail(ERROR_CODES.rateLimited);
-			}
+				return decodeBase32(opened.value.secret ?? "");
+			};
 
-			const record = await store.find(tenant, subject);
+			const newBackupCodes = async () => {
+				const codes = generateBackupCodes();
 
-			if (record === undefined || !record.confirmed) {
-				return fail(ERROR_CODES.invalidProof);
-			}
+				return {
+					codes,
+					hashes: await Promise.all(codes.map((code) => hashBackupCode(code))),
+				};
+			};
 
-			const backupCode = readText(response, "backupCode");
+			const verify = async (response: unknown, context: FactorContext) => {
+				const { tenant, subject } = context;
+				const claims = sameIdentity(context.proofs[0]);
 
-			if (backupCode !== undefined) {
-				return (await store.spendBackupCode(
+				if (subject === undefined || claims === undefined) {
+					return fail(ERROR_CODES.invalidProof);
+				}
+
+				const allowed = await applyLimit(limit, {
 					tenant,
 					subject,
-					await hashBackupCode(backupCode),
-				))
+					action: "verify",
+				});
+
+				if (!allowed.ok) {
+					return fail(ERROR_CODES.rateLimited);
+				}
+
+				const record = await store.find(tenant, subject);
+
+				if (record === undefined || !record.confirmed) {
+					return fail(ERROR_CODES.invalidProof);
+				}
+
+				const backupCode = readText(response, "backupCode");
+
+				if (backupCode !== undefined) {
+					return (await store.spendBackupCode(
+						tenant,
+						subject,
+						await hashBackupCode(backupCode),
+					))
+						? succeed(claims)
+						: fail(ERROR_CODES.invalidProof);
+				}
+
+				const code = readText(response, "code");
+				const secret = await openSecret(tenant, subject, record.sealedSecret);
+				const step =
+					code === undefined || secret === undefined
+						? undefined
+						: await findStep(secret, code, now());
+
+				return step !== undefined &&
+					(await store.advance(tenant, subject, step))
 					? succeed(claims)
 					: fail(ERROR_CODES.invalidProof);
-			}
+			};
 
-			const code = readText(response, "code");
-			const secret = await openSecret(tenant, subject, record.sealedSecret);
-			const step =
-				code === undefined || secret === undefined
-					? undefined
-					: await findStep(secret, code, now());
+			return {
+				verify,
+				api: {
+					async begin({ tenant, subject, account }) {
+						if (account === "") {
+							return fail(ERROR_CODES.invalidRequest);
+						}
 
-			return step !== undefined && (await store.advance(tenant, subject, step))
-				? succeed(claims)
-				: fail(ERROR_CODES.invalidProof);
-		},
-	};
+						const existing = await store.find(tenant, subject);
 
-	return {
-		factor,
-		async begin({ tenant, subject, account }) {
-			if (account === "") {
-				return fail(ERROR_CODES.invalidRequest);
-			}
+						if (existing?.confirmed) {
+							return fail(ERROR_CODES.forbidden);
+						}
 
-			const existing = await store.find(tenant, subject);
+						const secret = encodeBase32(
+							crypto.getRandomValues(new Uint8Array(SECRET_BYTES)),
+						);
 
-			if (existing?.confirmed) {
-				return fail(ERROR_CODES.forbidden);
-			}
+						await store.save(tenant, subject, {
+							sealedSecret: await sealer.seal({
+								purpose: SECRET_PURPOSE,
+								payload: { secret, tenant, subject },
+								timeToLive: options.secretTimeToLive,
+							}),
+							confirmed: false,
+							lastStep: NO_STEP_YET,
+							backupCodeHashes: [],
+						});
 
-			const secret = encodeBase32(
-				crypto.getRandomValues(new Uint8Array(SECRET_BYTES)),
-			);
+						const label = `${encodeURIComponent(issuer)}:${encodeURIComponent(account)}`;
+						const query = new URLSearchParams({
+							secret,
+							issuer,
+							algorithm: ALGORITHM_NAME,
+							digits: String(DIGITS),
+							period: String(PERIOD_SECONDS),
+						});
 
-			await store.save(tenant, subject, {
-				sealedSecret: await sealer.seal({
-					purpose: SECRET_PURPOSE,
-					payload: { secret, tenant, subject },
-					timeToLive: options.secretTimeToLive,
-				}),
-				confirmed: false,
-				lastStep: NO_STEP_YET,
-				backupCodeHashes: [],
-			});
+						return succeed({
+							secret,
+							uri: `otpauth://totp/${label}?${query.toString()}`,
+						});
+					},
+					async confirm({ tenant, subject, code }) {
+						const allowed = await applyLimit(limit, {
+							tenant,
+							subject,
+							action: "confirm",
+						});
 
-			const label = `${encodeURIComponent(issuer)}:${encodeURIComponent(account)}`;
-			const query = new URLSearchParams({
-				secret,
-				issuer,
-				algorithm: ALGORITHM_NAME,
-				digits: String(DIGITS),
-				period: String(PERIOD_SECONDS),
-			});
+						if (!allowed.ok) {
+							return fail(allowed.error);
+						}
 
-			return succeed({
-				secret,
-				uri: `otpauth://totp/${label}?${query.toString()}`,
-			});
-		},
-		async confirm({ tenant, subject, code }) {
-			const allowed = await applyLimit(options.limit, {
-				tenant,
-				subject,
-				action: "confirm",
-			});
+						const record = await store.find(tenant, subject);
 
-			if (!allowed.ok) {
-				return fail(allowed.error);
-			}
+						if (record === undefined || record.confirmed) {
+							return fail(ERROR_CODES.invalidRequest);
+						}
 
-			const record = await store.find(tenant, subject);
+						const secret = await openSecret(
+							tenant,
+							subject,
+							record.sealedSecret,
+						);
+						const step =
+							secret === undefined
+								? undefined
+								: await findStep(secret, code, now());
 
-			if (record === undefined || record.confirmed) {
-				return fail(ERROR_CODES.invalidRequest);
-			}
+						if (
+							step === undefined ||
+							!(await store.advance(tenant, subject, step))
+						) {
+							return fail(ERROR_CODES.invalidProof);
+						}
 
-			const secret = await openSecret(tenant, subject, record.sealedSecret);
-			const step =
-				secret === undefined ? undefined : await findStep(secret, code, now());
+						const { codes, hashes } = await newBackupCodes();
 
-			if (step === undefined || !(await store.advance(tenant, subject, step))) {
-				return fail(ERROR_CODES.invalidProof);
-			}
+						await store.save(tenant, subject, {
+							...record,
+							confirmed: true,
+							lastStep: step,
+							backupCodeHashes: hashes,
+						});
 
-			const { codes, hashes } = await newBackupCodes();
+						return succeed(codes);
+					},
+					async renewBackupCodes({ tenant, subject }) {
+						const record = await store.find(tenant, subject);
 
-			await store.save(tenant, subject, {
-				...record,
-				confirmed: true,
-				lastStep: step,
-				backupCodeHashes: hashes,
-			});
+						if (record === undefined || !record.confirmed) {
+							return fail(ERROR_CODES.invalidRequest);
+						}
 
-			return succeed(codes);
-		},
-		async renewBackupCodes({ tenant, subject }) {
-			const record = await store.find(tenant, subject);
+						const { codes, hashes } = await newBackupCodes();
 
-			if (record === undefined || !record.confirmed) {
-				return fail(ERROR_CODES.invalidRequest);
-			}
+						await store.save(tenant, subject, {
+							...record,
+							backupCodeHashes: hashes,
+						});
 
-			const { codes, hashes } = await newBackupCodes();
-
-			await store.save(tenant, subject, {
-				...record,
-				backupCodeHashes: hashes,
-			});
-
-			return succeed(codes);
-		},
-		remove({ tenant, subject }) {
-			return store.remove(tenant, subject);
+						return succeed(codes);
+					},
+					remove({ tenant, subject }) {
+						return store.remove(tenant, subject);
+					},
+				},
+			};
 		},
 	};
 }

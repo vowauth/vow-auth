@@ -41,6 +41,7 @@ export const AUDIT_REASONS = {
 	expired: "expired",
 	factorError: "factor-error",
 	factorRejected: "factor-rejected",
+	foreignProvider: "foreign-provider",
 	forbidden: "forbidden",
 	invalidClaims: "invalid-claims",
 	invalidEmail: "invalid-email",

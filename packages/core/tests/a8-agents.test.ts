@@ -13,7 +13,7 @@ import {
 	succeed,
 } from "@vow-auth/core";
 import { createSealer } from "@vow-auth/core/internal";
-import { durationOf } from "@vow-auth/test-support";
+import { durationOf, factorPluginOf } from "@vow-auth/test-support";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 const MINUTE = 60_000;
@@ -52,6 +52,9 @@ const emailFactor: Factor = {
 const createFixture = () => {
 	const records: AuditRecord[] = [];
 	const auth = createAuth({
+		factors: {
+			email: factorPluginOf(emailFactor.verify, { providers: ["email"] }),
+		},
 		identities: createMemoryIdentityStore(),
 		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
 		tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
@@ -69,7 +72,7 @@ const createFixture = () => {
 		const result = await auth.signIn({
 			tenant,
 			device,
-			factor: emailFactor,
+			factor: "email",
 			response: { email: address },
 		});
 

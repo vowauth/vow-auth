@@ -5,7 +5,6 @@ import {
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
 import {
-	type Auth,
 	createAuth,
 	defineDuration,
 	type Factor,
@@ -13,14 +12,13 @@ import {
 	requireFactor,
 	succeed,
 } from "@vow-auth/core";
-import { createLimiter, createMeter } from "@vow-auth/core/internal";
 import {
 	createMemoryTotpStore,
 	createTotp,
 	type TotpLimitInput,
 	type TotpOptions,
 } from "@vow-auth/factor-totp";
-import { meterRuleOf } from "@vow-auth/test-support";
+import { factorPluginOf, meterRuleOf } from "@vow-auth/test-support";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { decodeBase32 } from "../src/base32.js";
 import { generateCode, stepOf } from "../src/otp.js";
@@ -72,7 +70,17 @@ const secretLife = () => {
 const createFixture = (overrides: Partial<TotpOptions> = {}) => {
 	const enrolled = new Set<string>();
 	const store = createMemoryTotpStore({ maximumRecords: 100 });
-	const auth: Auth = createAuth({
+	const auth = createAuth({
+		factors: {
+			email: factorPluginOf(emailFactor.verify, { providers: ["email"] }),
+			totp: createTotp({
+				store,
+				issuer: "Vow",
+				secretTimeToLive: secretLife(),
+				limit: "off",
+				...overrides,
+			}),
+		},
 		identities: createMemoryIdentityStore(),
 		epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
 		tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
@@ -87,20 +95,13 @@ const createFixture = (overrides: Partial<TotpOptions> = {}) => {
 				: "allow",
 		audit: async () => undefined,
 	});
-	const totp = createTotp({
-		store,
-		sealer: auth.sealer,
-		issuer: "Vow",
-		secretTimeToLive: secretLife(),
-		limit: "off",
-		...overrides,
-	});
+	const totp = auth.factors.totp;
 
 	const firstStep = (address: string, device = "laptop") =>
 		auth.signIn({
 			tenant: TENANT,
 			device,
-			factor: emailFactor,
+			factor: "email",
 			response: { email: address },
 		});
 
@@ -166,7 +167,7 @@ const createFixture = (overrides: Partial<TotpOptions> = {}) => {
 		auth.signIn({
 			tenant: TENANT,
 			device,
-			factor: totp.factor,
+			factor: "totp",
 			response,
 			continuation,
 		});
@@ -244,7 +245,6 @@ test("an account or an issuer that would break the address is refused", async ()
 		expect(() =>
 			createTotp({
 				store: createMemoryTotpStore({ maximumRecords: 1 }),
-				sealer: createFixture().auth.sealer,
 				issuer,
 				secretTimeToLive: secretLife(),
 				limit: "off",
@@ -524,14 +524,14 @@ test("a sealed secret copied to another subject does not open", async () => {
 });
 
 test("the factor cannot be the first step: it does not say who the person is", async () => {
-	const { totp, auth, enroll, codeAt } = createFixture();
+	const { auth, enroll, codeAt } = createFixture();
 	const { secret } = await enroll("a@x.test");
 
 	expect(
 		await auth.signIn({
 			tenant: TENANT,
 			device: "laptop",
-			factor: totp.factor,
+			factor: "totp",
 			response: { code: await codeAt(secret) },
 		}),
 	).toEqual({ ok: false, error: "invalid-proof" });
@@ -574,17 +574,13 @@ test("removing an enrollment ends the factor for that subject", async () => {
 });
 
 test("a limit stops guessing for one subject and not for another", async () => {
-	const meter = createMeter({
-		store: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
-	});
 	const { enroll, challengeFor, secondStep, codeAt } = createFixture({
-		limit: createLimiter<TotpLimitInput>({
-			meter,
+		limit: {
 			rule: meterRuleOf({ limit: 3, windowMilliseconds: 600_000 }),
-			scopes: ({ tenant, subject, action }) => [
+			scopes: ({ tenant, subject, action }: TotpLimitInput) => [
 				{ tenant, actor: subject, resource: `totp:${action}` },
 			],
-		}),
+		},
 	});
 	const alice = await enroll("a@x.test");
 	const bob = await enroll("b@x.test");
@@ -610,13 +606,10 @@ test("a limit stops guessing for one subject and not for another", async () => {
 });
 
 test("a limit that is forgotten stops the factor from being built", () => {
-	const { auth } = createFixture();
-
 	for (const limit of [undefined, "none", 7]) {
 		expect(() =>
 			createTotp({
 				store: createMemoryTotpStore({ maximumRecords: 1 }),
-				sealer: auth.sealer,
 				issuer: "Vow",
 				secretTimeToLive: secretLife(),
 				// @ts-expect-error the point of the test is a value that is not a limit

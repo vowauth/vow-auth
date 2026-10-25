@@ -8,7 +8,14 @@ export {
 	type AuditSink,
 	report,
 } from "./audit.js";
-export { type Auth, type AuthOptions, createAuth } from "./auth.js";
+export {
+	type Auth,
+	type AuthFactors,
+	type AuthOptions,
+	createAuth,
+	type FactorApis,
+	type SubjectChange,
+} from "./auth.js";
 export {
 	DECISION_KINDS,
 	DENY_REASONS,
@@ -17,8 +24,14 @@ export {
 	requireFactor,
 	type StepUpVerdict,
 } from "./decision.js";
+export type { Devices, IssuedDevice } from "./devices.js";
 export { type Duration, defineDuration } from "./duration.js";
 export { ERROR_CODES } from "./errors.js";
+export type {
+	FactorCapabilities,
+	FactorInstance,
+	FactorPlugin,
+} from "./factor.js";
 export {
 	type CanonicalEmail,
 	canonicalizeEmail,
@@ -41,8 +54,10 @@ export {
 export {
 	applyLimit,
 	assertLimit,
+	assertLimitRule,
 	type Limit,
 	type Limiter,
+	type LimitRule,
 	NO_LIMIT,
 } from "./meter/limiter.js";
 export {

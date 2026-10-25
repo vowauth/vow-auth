@@ -7,46 +7,107 @@ import {
 import {
 	type AuditRecord,
 	type AuditSink,
+	type AuthFactors,
 	type AuthOptions,
 	createAuth,
-	defineDuration,
-	type Factor,
+	type FactorCapabilities,
+	type FactorPlugin,
+	fail,
 	requireFactor,
 	succeed,
 } from "@vow-auth/core";
-import { durationOf, meterRuleOf } from "@vow-auth/test-support";
+import {
+	durationOf,
+	factorPluginOf,
+	meterRuleOf,
+} from "@vow-auth/test-support";
 import { expect, test } from "vitest";
 
 const LIFE_TIME = 60_000;
 
-const optionsWith = (audit: AuditSink): AuthOptions => ({
+const aliceClaims = {
+	provider: "email",
+	externalId: "alice@example.com",
+	email: "alice@example.com",
+	emailVerified: true,
+};
+
+const emailFactor = factorPluginOf(async () => succeed(aliceClaims), {
+	providers: ["email"],
+});
+
+/** A factor that redeems the tokens of its own domain, as an email link does. */
+const linkFactor: FactorPlugin<{
+	issue(email: string): Promise<string>;
+}> = {
+	strength: "possession",
+	providers: ["email"],
+	create: ({ tokens }) => ({
+		async verify(response) {
+			if (typeof response !== "string") {
+				return fail("invalid-token");
+			}
+
+			const consumed = await tokens.consume(response, "email-link");
+
+			return consumed.ok
+				? succeed({
+						provider: "email",
+						externalId: consumed.value.email,
+						email: consumed.value.email,
+						emailVerified: true,
+					})
+				: consumed;
+		},
+		api: {
+			issue: (email) =>
+				tokens.issue({
+					purpose: "email-link",
+					payload: { email },
+					timeToLive: durationOf(LIFE_TIME),
+				}),
+		},
+	}),
+};
+
+/** A factor written to break in: it keeps the capabilities it was given. */
+const createEvilFactor = () => {
+	const held: { capabilities?: FactorCapabilities } = {};
+	const plugin: FactorPlugin<Record<string, never>> = {
+		strength: "possession",
+		providers: ["evil"],
+		create(capabilities) {
+			held.capabilities = capabilities;
+
+			return { verify: async () => fail("invalid-proof"), api: {} };
+		},
+	};
+
+	return { plugin, held };
+};
+
+const optionsWith = <Factors extends AuthFactors>(
+	audit: AuditSink,
+	factors: Factors,
+): AuthOptions<Factors> => ({
 	identities: createMemoryIdentityStore(),
 	epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
 	tokenStore: createMemoryTokenStore({ maximumBytes: 1_000_000 }),
 	meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
 	secrets: [{ version: 1, value: "auth-secret-0123456789abcdefghijklmnop" }],
+	factors,
 	maximumLifeTimeMilliseconds: LIFE_TIME,
 	sessionTimeToLiveMilliseconds: LIFE_TIME,
 	policy: () => "allow",
 	audit,
 });
 
-const emailFactor: Factor = {
-	id: "email",
-	strength: "possession",
-	verify: async () =>
-		succeed({
-			provider: "email",
-			externalId: "alice@example.com",
-			email: "alice@example.com",
-			emailVerified: true,
-		}),
-};
+const quiet = async () => undefined;
 
 test("the audit sink is required, and a missing one is refused when the types are bypassed", () => {
-	const { audit: _omitted, ...withoutAudit } = optionsWith(
-		async () => undefined,
-	);
+	const { audit: _omitted, ...withoutAudit } = optionsWith(quiet, {
+		email: emailFactor,
+	});
 
 	expect(() => {
 		// @ts-expect-error the audit sink is required
@@ -60,29 +121,34 @@ test("the audit sink is required, and a missing one is refused when the types ar
 test("one sink reaches every part of the core", async () => {
 	const records: AuditRecord[] = [];
 	const auth = createAuth(
-		optionsWith(async (record) => {
-			records.push(record);
-		}),
+		optionsWith(
+			async (record) => {
+				records.push(record);
+			},
+			{ email: emailFactor, link: linkFactor },
+		),
 	);
 
-	const link = await auth.tokens.issue({
-		purpose: "email-link",
-		timeToLive: durationOf(1_000),
-	});
-
-	await auth.tokens.consume(link, "email-link");
-	await auth.sealer.unseal("1.garbage", "oauth-state");
+	await auth.factors.link.issue("bob@example.com");
+	await auth.devices.open("1.garbage");
 
 	const signedIn = await auth.signIn({
 		tenant: "acme",
 		device: "laptop",
-		factor: emailFactor,
+		factor: "email",
 		response: undefined,
 	});
 
 	if (!signedIn.ok) {
 		throw new Error("the sign in must pass");
 	}
+
+	await auth.signIn({
+		tenant: "acme",
+		device: "laptop",
+		factor: "link",
+		response: "0".repeat(64),
+	});
 
 	const limiter = auth.createLimiter<string>({
 		rule: meterRuleOf({ limit: 1, windowMilliseconds: 1_000 }),
@@ -115,45 +181,111 @@ test("one sink reaches every part of the core", async () => {
 
 test("a failing sink stops every part that grants something", async () => {
 	const auth = createAuth(
-		optionsWith(async () => {
-			throw new Error("the audit store is down");
-		}),
+		optionsWith(
+			async () => {
+				throw new Error("the audit store is down");
+			},
+			{ email: emailFactor, link: linkFactor },
+		),
 	);
 
-	await expect(
-		auth.tokens.issue({ purpose: "p", timeToLive: durationOf(1_000) }),
-	).rejects.toThrow("the audit store is down");
+	await expect(auth.factors.link.issue("bob@example.com")).rejects.toThrow(
+		"the audit store is down",
+	);
 	await expect(
 		auth.signIn({
 			tenant: "acme",
 			device: "laptop",
-			factor: emailFactor,
+			factor: "email",
 			response: undefined,
 		}),
 	).rejects.toThrow("the audit store is down");
 });
 
-test("the sessions part can check and revoke but not issue", () => {
-	const auth = createAuth(optionsWith(async () => undefined));
+test("no part of the core issues anything for its caller", () => {
+	const auth = createAuth(optionsWith(quiet, { email: emailFactor }));
 
+	expect(Object.keys(auth).sort()).toEqual([
+		"agents",
+		"createLimiter",
+		"devices",
+		"factors",
+		"mutateIdentity",
+		"sessions",
+		"signIn",
+	]);
 	expect(Object.keys(auth.sessions).sort()).toEqual(["revoke", "verify"]);
+	expect(auth.factors).toEqual({ email: {} });
+	expect(Object.isFrozen(auth.factors)).toBe(true);
 });
 
-const hour = () => {
-	const duration = defineDuration(3_600_000);
+test("a sign in cannot bring a factor of its own, only name one the core was built with", async () => {
+	const auth = createAuth(optionsWith(quiet, { email: emailFactor }));
+	const ownFactor = {
+		id: "email",
+		strength: "possession",
+		verify: async () => succeed(aliceClaims),
+	};
 
-	if (!duration.ok) {
-		throw new Error("an hour is a valid duration");
+	for (const factor of ["unknown", "constructor", "__proto__", "", ownFactor]) {
+		expect(
+			await auth.signIn({
+				tenant: "acme",
+				device: "laptop",
+				// @ts-expect-error a factor of the caller's own is not a factor id
+				factor,
+				response: undefined,
+			}),
+			String(factor),
+		).toEqual({ ok: false, error: "invalid-request" });
+	}
+});
+
+test("a factor cannot claim the accounts of a provider it was not built for", async () => {
+	const records: AuditRecord[] = [];
+	const auth = createAuth(
+		optionsWith(
+			async (record) => {
+				records.push(record);
+			},
+			{
+				github: factorPluginOf(async () => succeed(aliceClaims), {
+					providers: ["github"],
+				}),
+			},
+		),
+	);
+
+	expect(
+		await auth.signIn({
+			tenant: "acme",
+			device: "laptop",
+			factor: "github",
+			response: undefined,
+		}),
+	).toEqual({ ok: false, error: "invalid-proof" });
+	expect(records).toEqual([
+		expect.objectContaining({
+			event: "proof.verify",
+			outcome: "refusal",
+			reason: "foreign-provider",
+		}),
+	]);
+});
+
+test("a factor seals nothing that opens as a session, an agent or a device", async () => {
+	const { plugin, held } = createEvilFactor();
+	const auth = createAuth(optionsWith(quiet, { evil: plugin }));
+	const sealer = held.capabilities?.sealer;
+
+	if (sealer === undefined) {
+		throw new Error("the engine must create the factor");
 	}
 
-	return duration.value;
-};
-
-test("what the application seals never opens as a session, however it is shaped", async () => {
-	const auth = createAuth(optionsWith(async () => undefined));
 	const now = Date.now();
 	const future = now + 10 ** 12;
-	const forged = await auth.sealer.seal({
+	const hour = durationOf(3_600_000);
+	const session = await sealer.seal({
 		purpose: "session",
 		payload: {
 			chain: JSON.stringify([
@@ -166,9 +298,9 @@ test("what the application seals never opens as a session, however it is shaped"
 			authenticatedAtMilliseconds: String(now),
 			methods: JSON.stringify(["totp"]),
 		},
-		timeToLive: hour(),
+		timeToLive: hour,
 	});
-	const agent = await auth.sealer.seal({
+	const agent = await sealer.seal({
 		purpose: "agent",
 		payload: {
 			chain: JSON.stringify([
@@ -180,10 +312,15 @@ test("what the application seals never opens as a session, however it is shaped"
 			expiresAtMilliseconds: String(now + 3_600_000),
 			delegatedAtMilliseconds: String(now),
 		},
-		timeToLive: hour(),
+		timeToLive: hour,
+	});
+	const device = await sealer.seal({
+		purpose: "device",
+		payload: { id: "a".repeat(64) },
+		timeToLive: hour,
 	});
 
-	expect(await auth.sessions.verify(forged)).toEqual({
+	expect(await auth.sessions.verify(session)).toEqual({
 		ok: false,
 		error: "invalid-session",
 	});
@@ -191,21 +328,37 @@ test("what the application seals never opens as a session, however it is shaped"
 		ok: false,
 		error: "invalid-session",
 	});
+	expect(await auth.devices.open(device)).toBeUndefined();
 });
 
-test("a token the application issues never continues a sign in", async () => {
+test("a factor issues no token that continues a sign in or opens another factor", async () => {
 	const records: AuditRecord[] = [];
+	const { plugin, held } = createEvilFactor();
 	const auth = createAuth({
-		...optionsWith(async (record) => {
-			records.push(record);
-		}),
+		...optionsWith(
+			async (record) => {
+				records.push(record);
+			},
+			{ evil: plugin, link: linkFactor },
+		),
 		stepUpTimeToLiveMilliseconds: 60_000,
-		policy: () => requireFactor("email"),
+		policy: () => requireFactor("link"),
 	});
-	const forged = await auth.tokens.issue({
+	const tokens = held.capabilities?.tokens;
+
+	if (tokens === undefined) {
+		throw new Error("the engine must create the factor");
+	}
+
+	const continuation = await tokens.issue({
 		purpose: "sign-in-continuation",
-		payload: { tenant: "acme", device: "laptop", factor: "email" },
-		timeToLive: hour(),
+		payload: { tenant: "acme", device: "laptop", factor: "link" },
+		timeToLive: durationOf(LIFE_TIME),
+	});
+	const link = await tokens.issue({
+		purpose: "email-link",
+		payload: { email: "victim@example.com" },
+		timeToLive: durationOf(LIFE_TIME),
 	});
 
 	records.length = 0;
@@ -214,14 +367,119 @@ test("a token the application issues never continues a sign in", async () => {
 		await auth.signIn({
 			tenant: "acme",
 			device: "laptop",
-			factor: emailFactor,
+			factor: "link",
 			response: undefined,
-			continuation: forged,
+			continuation,
 		}),
 	).toEqual({ ok: false, error: "invalid-token" });
-	expect(records[0]).toMatchObject({
-		event: "token.consume",
-		outcome: "refusal",
-		reason: "wrong-purpose",
+	expect(
+		await auth.signIn({
+			tenant: "acme",
+			device: "laptop",
+			factor: "link",
+			response: link,
+		}),
+	).toEqual({ ok: false, error: "invalid-proof" });
+	expect(
+		records
+			.filter((record) => record.event === "token.consume")
+			.map((record) => record.reason),
+	).toEqual(["wrong-purpose", "wrong-purpose"]);
+});
+
+test("the application deletes a subject but cannot confirm an email for anyone", async () => {
+	const auth = createAuth(optionsWith(quiet, { email: emailFactor }));
+
+	expect(
+		await auth.mutateIdentity("acme", "anyone", {
+			// @ts-expect-error confirming an email is the sign in's alone
+			type: "confirm-email",
+			proof: {},
+		}),
+	).toEqual({ ok: false, error: "invalid-request" });
+});
+
+test("factors without the providers they may claim stop the start", () => {
+	for (const providers of [[], [""], "email", undefined]) {
+		expect(() =>
+			createAuth(
+				optionsWith(quiet, {
+					broken: {
+						strength: "possession",
+						// @ts-expect-error providers must be a list of names
+						providers,
+						create: () => ({ verify: async () => fail("x"), api: {} }),
+					},
+				}),
+			),
+		).toThrow(RangeError);
+	}
+
+	expect(() =>
+		// @ts-expect-error the factors are required
+		createAuth({ ...optionsWith(quiet, {}), factors: undefined }),
+	).toThrow(TypeError);
+});
+
+test("a second factor may repeat who the first one proved, and may not name anyone else", async () => {
+	const records: AuditRecord[] = [];
+	const auth = createAuth({
+		...optionsWith(
+			async (record) => {
+				records.push(record);
+			},
+			{
+				email: emailFactor,
+				code: factorPluginOf(async (response) => succeed(response), {
+					providers: ["code"],
+				}),
+			},
+		),
+		stepUpTimeToLiveMilliseconds: 60_000,
+		policy: ({ proofs }) =>
+			proofs.length > 1 ? "allow" : requireFactor("code"),
 	});
+	const continuation = async () => {
+		const first = await auth.signIn({
+			tenant: "acme",
+			device: "laptop",
+			factor: "email",
+			response: undefined,
+		});
+
+		if (first.ok || typeof first.error === "string") {
+			throw new Error("a step-up was expected");
+		}
+
+		return first.error.continuation;
+	};
+	const secondStep = async (claims: unknown) =>
+		auth.signIn({
+			tenant: "acme",
+			device: "laptop",
+			factor: "code",
+			response: claims,
+			continuation: await continuation(),
+		});
+
+	expect((await secondStep(aliceClaims)).ok).toBe(true);
+
+	records.length = 0;
+
+	expect(
+		await secondStep({
+			...aliceClaims,
+			externalId: "mallory@example.com",
+			email: "mallory@example.com",
+		}),
+	).toEqual({ ok: false, error: "invalid-proof" });
+	expect(await secondStep({ ...aliceClaims, emailVerified: false })).toEqual({
+		ok: false,
+		error: "invalid-proof",
+	});
+	expect(
+		records
+			.filter((record) => record.event === "proof.verify")
+			.map((record) => record.reason),
+	).toEqual(["verified", "foreign-provider", "verified", "foreign-provider"]);
 });

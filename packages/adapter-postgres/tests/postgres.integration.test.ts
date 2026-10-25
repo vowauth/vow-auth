@@ -9,12 +9,8 @@ import {
 	POSTGRES_SCHEMA,
 	type PostgresRunner,
 } from "@vow-auth/adapter-postgres";
-import {
-	canonicalizeEmail,
-	createAuth,
-	type Factor,
-	succeed,
-} from "@vow-auth/core";
+import { canonicalizeEmail, createAuth, succeed } from "@vow-auth/core";
+import { factorPluginOf } from "@vow-auth/test-support";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
@@ -198,6 +194,17 @@ describe.runIf(databaseUrl !== undefined)("postgres specifics", () => {
 
 	test("a sign in with a name the database cannot hold is a refusal, never a database error", async () => {
 		const auth = createAuth({
+			factors: {
+				idp: factorPluginOf(
+					async (response) =>
+						succeed({
+							provider: "idp",
+							externalId: Reflect.get(Object(response), "externalId"),
+							emailVerified: false,
+						}),
+					{ providers: ["idp"] },
+				),
+			},
 			identities: createPostgresIdentityStore(run),
 			tokenStore: createPostgresTokenStore(run),
 			epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
@@ -209,12 +216,6 @@ describe.runIf(databaseUrl !== undefined)("postgres specifics", () => {
 			sessionTimeToLiveMilliseconds: HOUR,
 			policy: () => "allow",
 			audit: async () => undefined,
-		});
-		const factorFor = (externalId: string): Factor => ({
-			id: "idp",
-			strength: "possession",
-			verify: async () =>
-				succeed({ provider: "idp", externalId, emailVerified: false }),
 		});
 		const NUL = String.fromCharCode(0);
 		const LONE_SURROGATE = String.fromCharCode(0xd800);
@@ -233,8 +234,8 @@ describe.runIf(databaseUrl !== undefined)("postgres specifics", () => {
 			const result = await auth.signIn({
 				tenant,
 				device,
-				factor: factorFor(externalId),
-				response: {},
+				factor: "idp",
+				response: { externalId },
 			});
 
 			expect(result.ok, JSON.stringify({ tenant, device, externalId })).toBe(
@@ -247,8 +248,8 @@ describe.runIf(databaseUrl !== undefined)("postgres specifics", () => {
 				await auth.signIn({
 					tenant: "acme",
 					device: "Ivan's 👩‍💻 laptop",
-					factor: factorFor("alice"),
-					response: {},
+					factor: "idp",
+					response: { externalId: "alice" },
 				})
 			).ok,
 		).toBe(true);

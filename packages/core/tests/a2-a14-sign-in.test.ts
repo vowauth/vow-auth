@@ -14,6 +14,7 @@ import {
 	type Factor,
 	type ProofStrength,
 	type SignInPolicyInput,
+	type SignInRequest,
 	succeed,
 } from "@vow-auth/core/internal";
 import { durationOf } from "@vow-auth/test-support";
@@ -58,7 +59,9 @@ const createFixture = (options: {
 		sessionTokens,
 		audit,
 	});
-	const signIn = createSignIn({
+	const factors = new Map<string, Factor>();
+	const signInById = createSignIn({
+		factors,
 		identities,
 		sessionTokens,
 		mutateIdentity,
@@ -69,6 +72,13 @@ const createFixture = (options: {
 		sessionTimeToLiveMilliseconds: LIFE_TIME,
 		audit,
 	});
+	const signIn = (
+		request: Omit<SignInRequest, "factor"> & { readonly factor: Factor },
+	) => {
+		factors.set(request.factor.id, request.factor);
+
+		return signInById({ ...request, factor: request.factor.id });
+	};
 
 	return { issueSpy, sessionTokens, signIn };
 };
@@ -287,7 +297,9 @@ test("when the email cannot be confirmed the policy is not even asked", async ()
 		maximumLifeTimeMilliseconds: LIFE_TIME,
 	});
 	const policy = vi.fn(() => "allow");
+	const factor = factorOf("f", "possession", emailClaims("a@example.com"));
 	const signIn = createSignIn({
+		factors: new Map([[factor.id, factor]]),
 		identities,
 		sessionTokens,
 		mutateIdentity: async () => ({ ok: false, error: "forbidden" }),
@@ -301,7 +313,7 @@ test("when the email cannot be confirmed the policy is not even asked", async ()
 	const result = await signIn({
 		tenant: "acme",
 		device: "laptop",
-		factor: factorOf("f", "possession", emailClaims("a@example.com")),
+		factor: factor.id,
 		response: undefined,
 	});
 

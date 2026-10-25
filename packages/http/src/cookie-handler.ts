@@ -1,4 +1,4 @@
-import { type Auth, defineDuration } from "@vow-auth/core";
+import type { Auth } from "@vow-auth/core";
 import {
 	type CookieSettings,
 	clearCookie,
@@ -15,17 +15,14 @@ import {
 } from "./handler.js";
 import { checkOrigin, parseOrigins } from "./origin.js";
 
-const DEVICE_PURPOSE = "device";
-const DEVICE_ID_BYTES = 16;
 const DEVICE_MAXIMUM_AGE_SECONDS = 400 * 24 * 60 * 60;
 const HOST_PREFIX = "__Host-";
 const SESSION_COOKIE = "vow-session";
 const DEVICE_COOKIE = "vow-device";
-const DEVICE_ID = /^[0-9a-f]{32}$/;
 
 /** Options of the handler for browsers. */
 export type CookieHandlerOptions = Omit<HandlerOptions, "auth"> & {
-	readonly auth: Pick<Auth, "signIn" | "sessions" | "sealer">;
+	readonly auth: Pick<Auth, "signIn" | "sessions" | "factors" | "devices">;
 	/**
 	 * The origin the application is served from, such as
 	 * https://app.example.com. It decides the Secure attribute and the prefix
@@ -46,20 +43,15 @@ export type CookieHandlerOptions = Omit<HandlerOptions, "auth"> & {
 	readonly sameSite?: SameSite;
 };
 
-const randomHex = (bytes: number): string => {
-	return Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (byte) =>
-		byte.toString(16).padStart(2, "0"),
-	).join("");
-};
-
 /**
  * Creates the handler for browsers. The token of a session lives only in a
  * cookie that script cannot read (HttpOnly, Secure, __Host-, an explicit
  * SameSite) and never appears in a body. A request that changes something
  * must come from a page of the application (Fetch Metadata and the whole
  * Origin) and carry JSON, so another site cannot post to it, and the header
- * Authorization is not read at all. Each browser gets a random device id in a
- * sealed cookie, so signing out of a device ends this browser and no other.
+ * Authorization is not read at all. Each browser gets a device the engine
+ * issues, in a sealed cookie, so signing out of a device ends this browser
+ * and no other.
  */
 export function createCookieHandler(
 	options: CookieHandlerOptions,
@@ -70,9 +62,8 @@ export function createCookieHandler(
 		...(options.allowedOrigins ?? []),
 	]);
 	const secure = options.origin.startsWith("https:");
-	const deviceLife = defineDuration(DEVICE_MAXIMUM_AGE_SECONDS * 1_000);
 
-	if (!origins.has(options.origin) || !deviceLife.ok) {
+	if (!origins.has(options.origin)) {
 		throw new RangeError("origin must be an origin, without a path");
 	}
 
@@ -98,16 +89,9 @@ export function createCookieHandler(
 	};
 
 	const knownDevice = async (request: Request): Promise<string | undefined> => {
-		const sealed = readCookie(request, deviceCookie.name);
+		const handle = readCookie(request, deviceCookie.name);
 
-		if (sealed === undefined) {
-			return undefined;
-		}
-
-		const opened = await auth.sealer.unseal(sealed, DEVICE_PURPOSE);
-		const id = opened.ok ? opened.value.id : undefined;
-
-		return id !== undefined && DEVICE_ID.test(id) ? id : undefined;
+		return handle === undefined ? undefined : auth.devices.open(handle);
 	};
 
 	const mode: Mode = {
@@ -125,14 +109,12 @@ export function createCookieHandler(
 				return { device: known, cookies: [] };
 			}
 
-			const id = randomHex(DEVICE_ID_BYTES);
-			const sealed = await auth.sealer.seal({
-				purpose: DEVICE_PURPOSE,
-				payload: { id },
-				timeToLive: deviceLife.value,
-			});
+			const issued = await auth.devices.issue();
 
-			return { device: id, cookies: [serializeCookie(deviceCookie, sealed)] };
+			return {
+				device: issued.id,
+				cookies: [serializeCookie(deviceCookie, issued.handle)],
+			};
 		},
 		signedIn: (signedIn, choice) =>
 			answer(
