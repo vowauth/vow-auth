@@ -10,10 +10,6 @@ export {
 	type MemoryMeterStoreOptions,
 } from "./memory-meter-store.js";
 export {
-	createMemoryOutboxStore,
-	type MemoryOutboxStore,
-} from "./memory-outbox-store.js";
-export {
 	createMemoryTokenStore,
 	type MemoryTokenStore,
 	type MemoryTokenStoreOptions,

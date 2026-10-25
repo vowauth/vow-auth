@@ -45,24 +45,6 @@ export const POSTGRES_SCHEMA_STATEMENTS: readonly string[] = [
 )`,
 	`create index if not exists vow_auth_tokens_expiry
 	on vow_auth_tokens (expires_at_milliseconds)`,
-	`create table if not exists vow_auth_outbox (
-	seq bigserial primary key,
-	id text not null unique,
-	type text not null,
-	payload text not null,
-	attempts integer not null default 0,
-	available_at_milliseconds bigint not null default 0
-)`,
-	`create index if not exists vow_auth_outbox_available
-	on vow_auth_outbox (available_at_milliseconds, seq)`,
-	`create table if not exists vow_auth_outbox_buried (
-	seq bigserial primary key,
-	id text not null,
-	type text not null,
-	payload text not null,
-	attempts integer not null,
-	buried_at_milliseconds bigint not null
-)`,
 ];
 
 /** The same statements as one text, to paste into the migration of the application. */

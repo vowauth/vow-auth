@@ -1,5 +1,4 @@
 export { createPostgresIdentityStore } from "./postgres-identity-store.js";
-export { createPostgresOutboxStore } from "./postgres-outbox-store.js";
 export type { PostgresRow, PostgresRunner } from "./postgres-runner.js";
 export {
 	createPostgresTokenStore,

@@ -3,7 +3,6 @@ export const ERROR_CODES = {
 	forbidden: "forbidden",
 	invalidDelegation: "invalid-delegation",
 	invalidEmail: "invalid-email",
-	invalidEvent: "invalid-event",
 	invalidProof: "invalid-proof",
 	invalidRequest: "invalid-request",
 	invalidSeal: "invalid-seal",

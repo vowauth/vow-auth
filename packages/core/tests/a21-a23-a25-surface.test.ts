@@ -2,14 +2,12 @@ import {
 	createMemoryEpochStore,
 	createMemoryIdentityStore,
 	createMemoryMeterStore,
-	createMemoryOutboxStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
 import * as core from "@vow-auth/core";
 import {
 	type AuthOptions,
 	createAuth,
-	createEmit,
 	type Factor,
 	succeed,
 } from "@vow-auth/core";
@@ -58,10 +56,8 @@ test("A21, A25: the public surface is exactly this, so a new export or a weakeni
 		"assertLimit",
 		"canonicalizeEmail",
 		"createAuth",
-		"createEmit",
 		"createLimiter",
 		"createOutboundGuard",
-		"createOutboxWorker",
 		"createRedirectPolicy",
 		"defineDuration",
 		"defineMeterRule",
@@ -147,16 +143,6 @@ test("A23: the core never changes what it is given", async () => {
 	);
 
 	expect((await auth.sealer.unseal(sealed, "oauth-state")).ok).toBe(true);
-
-	const emit = createEmit(createMemoryOutboxStore());
-
-	expect(
-		(
-			await emit(
-				deepFreeze({ type: "email.send", payload: { to: "a@example.com" } }),
-			)
-		).ok,
-	).toBe(true);
 
 	if (signedIn.ok) {
 		expect(

@@ -10,10 +10,6 @@ export {
 	type MeterStoreContractOptions,
 	meterStoreContract,
 } from "./meter-store-contract.js";
-export {
-	type OutboxStoreContractOptions,
-	outboxStoreContract,
-} from "./outbox-store-contract.js";
 export type { StoreClock } from "./store-clock.js";
 export {
 	type TokenStoreContractOptions,

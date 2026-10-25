@@ -1,13 +1,11 @@
 import {
 	createPostgresIdentityStore,
-	createPostgresOutboxStore,
 	createPostgresSchema,
 	createPostgresTokenStore,
 	type PostgresRunner,
 } from "@vow-auth/adapter-postgres";
 import {
 	identityStoreContract,
-	outboxStoreContract,
 	type StoreClock,
 	tokenStoreContract,
 } from "@vow-auth/store-contracts";
@@ -15,7 +13,6 @@ import pg from "pg";
 import { afterAll, beforeAll, describe } from "vitest";
 
 const databaseUrl = process.env.VOW_AUTH_POSTGRES_URL;
-const OUTBOX_LEASE_MILLISECONDS = 400;
 
 describe.runIf(databaseUrl !== undefined)("postgres", () => {
 	const SCHEMA = "vow_test_contracts";
@@ -61,15 +58,5 @@ describe.runIf(databaseUrl !== undefined)("postgres", () => {
 	tokenStoreContract("postgres", {
 		create: () => createPostgresTokenStore(run),
 		clock,
-	});
-
-	outboxStoreContract("postgres", {
-		create: async () => {
-			await pool.query("truncate vow_auth_outbox");
-
-			return createPostgresOutboxStore(run);
-		},
-		clock,
-		leaseMilliseconds: OUTBOX_LEASE_MILLISECONDS,
 	});
 });

@@ -4,7 +4,6 @@ import {
 } from "@vow-auth/adapter-memory";
 import {
 	createPostgresIdentityStore,
-	createPostgresOutboxStore,
 	createPostgresSchema,
 	createPostgresTokenStore,
 	POSTGRES_SCHEMA,
@@ -37,14 +36,6 @@ describe.runIf(databaseUrl !== undefined)("postgres specifics", () => {
 		return result.rows;
 	};
 
-	const runIn =
-		(client: pg.PoolClient): PostgresRunner =>
-		async (text, parameters) => {
-			const result = await client.query(text, [...parameters]);
-
-			return result.rows;
-		};
-
 	beforeAll(async () => {
 		await admin.query(`create schema if not exists ${SCHEMA}`);
 		await createPostgresSchema(run);
@@ -74,8 +65,6 @@ describe.runIf(databaseUrl !== undefined)("postgres specifics", () => {
 
 			expect(tables.rows.map((row) => row.table_name)).toEqual([
 				"vow_auth_identities",
-				"vow_auth_outbox",
-				"vow_auth_outbox_buried",
 				"vow_auth_subjects",
 				"vow_auth_tokens",
 			]);
@@ -164,69 +153,6 @@ describe.runIf(databaseUrl !== undefined)("postgres specifics", () => {
 		await expect(
 			store.deleteSubject(tenant, squatter.subjectId),
 		).rejects.toThrow();
-	});
-
-	test("an event appended in a transaction exists only if the transaction commits", async () => {
-		await pool.query("truncate vow_auth_outbox");
-
-		const worker = createPostgresOutboxStore(run);
-		const event = (name: string) => ({
-			id: `${name}-${crypto.randomUUID()}`,
-			type: "mail",
-			payload: { to: "a@example.com" },
-		});
-		const rolledBack = event("rolled-back");
-		const committed = event("committed");
-
-		for (const [appended, ending] of [
-			[rolledBack, "rollback"],
-			[committed, "commit"],
-		] as const) {
-			const client = await pool.connect();
-
-			try {
-				await client.query("begin");
-				await createPostgresOutboxStore(runIn(client)).append(appended);
-
-				expect(
-					await worker.claim({ limit: 10, leaseMilliseconds: HOUR }),
-				).toEqual(ending === "commit" ? [] : []);
-
-				await client.query(ending);
-			} finally {
-				client.release();
-			}
-		}
-
-		const claimed = await worker.claim({ limit: 10, leaseMilliseconds: HOUR });
-
-		expect(claimed.map((record) => record.id)).toEqual([committed.id]);
-	});
-
-	test("a buried event is kept apart for inspection", async () => {
-		await pool.query("truncate vow_auth_outbox, vow_auth_outbox_buried");
-
-		const store = createPostgresOutboxStore(run);
-		const id = `buried-${crypto.randomUUID()}`;
-
-		await store.append({ id, type: "mail", payload: { to: "a@example.com" } });
-
-		const [record] = await store.claim({ limit: 1, leaseMilliseconds: HOUR });
-
-		if (record === undefined) {
-			throw new Error("the event must be claimed");
-		}
-
-		await store.bury(record);
-
-		const buried = await pool.query(
-			"select id, attempts from vow_auth_outbox_buried",
-		);
-
-		expect(buried.rows).toEqual([{ id, attempts: 1 }]);
-		expect(await store.claim({ limit: 1, leaseMilliseconds: HOUR })).toEqual(
-			[],
-		);
 	});
 
 	test("purging removes the expired tokens by the server's clock and keeps the rest", async () => {

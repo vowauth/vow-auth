@@ -2,12 +2,10 @@ import {
 	createMemoryEpochStore,
 	createMemoryIdentityStore,
 	createMemoryMeterStore,
-	createMemoryOutboxStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
 import {
 	createAuth,
-	createEmit,
 	type Factor,
 	fail,
 	type IdentityStore,
@@ -169,30 +167,6 @@ test("an agent whose name cannot be stored is refused before anything is written
 		{ numRuns: 100 },
 	);
 	expect(calls.filter((name) => name === "revoke")).toEqual([]);
-});
-
-test("an event type that cannot be stored is refused, while a payload may hold any text", async () => {
-	const store = createMemoryOutboxStore();
-	const emit = createEmit(store);
-
-	await fastCheck.assert(
-		fastCheck.asyncProperty(cannotBeStored, async (bad) => {
-			expect(await emit({ type: bad, payload: {} })).toEqual({
-				ok: false,
-				error: "invalid-event",
-			});
-		}),
-		{ numRuns: 100 },
-	);
-	expect(store.pending()).toBe(0);
-	expect(
-		(
-			await emit({
-				type: "mail",
-				payload: { body: "line one\nline two\u0000" },
-			})
-		).ok,
-	).toBe(true);
 });
 
 test("names that people really use are accepted", async () => {

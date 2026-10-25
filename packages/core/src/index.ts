@@ -67,20 +67,6 @@ export {
 	type SlidingWindowState,
 	slidingWindow,
 } from "./meter/sliding-window.js";
-export { createEmit, type Emit } from "./outbox/emit.js";
-export type {
-	ClaimInput,
-	DomainEvent,
-	OutboxRecord,
-	OutboxStore,
-} from "./outbox/outbox-store.js";
-export {
-	createOutboxWorker,
-	type OutboxHandler,
-	type OutboxRunSummary,
-	type OutboxWorker,
-	type OutboxWorkerOptions,
-} from "./outbox/outbox-worker.js";
 export {
 	EMAIL_PROVIDER,
 	type Factor,
