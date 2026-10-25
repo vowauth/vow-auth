@@ -41,16 +41,12 @@ export {
 export {
 	applyLimit,
 	assertLimit,
-	createLimiter,
 	type Limit,
 	type Limiter,
-	type LimiterOptions,
 	NO_LIMIT,
 } from "./meter/limiter.js";
 export {
 	defineMeterRule,
-	type Meter,
-	type MeterObservation,
 	type MeterRefusal,
 	type MeterRule,
 	type MeterScope,

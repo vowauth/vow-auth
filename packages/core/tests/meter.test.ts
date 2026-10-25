@@ -171,22 +171,16 @@ test("A26: a cost the meter cannot count, or a look-alike rule, is a refusal tha
 		expect(await meter.consume(SCOPE, RULE, cost), String(cost)).toEqual(
 			refused,
 		);
-		expect(await meter.observe(SCOPE, RULE, cost), String(cost)).toEqual(
-			refused,
-		);
 	}
 
 	const lookAlike = { limit: 1, windowMilliseconds: 1_000 };
 
 	// @ts-expect-error a look-alike that did not come from defineMeterRule
 	expect(await meter.consume(SCOPE, lookAlike)).toEqual(refused);
-	// @ts-expect-error a look-alike that did not come from defineMeterRule
-	expect(await meter.observe(SCOPE, lookAlike)).toEqual(refused);
 
-	expect((await meter.consume(SCOPE, RULE)).ok).toBe(true);
-	expect(await meter.observe(SCOPE, RULE, 1)).toMatchObject({
+	expect(await meter.consume(SCOPE, RULE)).toMatchObject({
 		ok: true,
-		value: { used: 2 },
+		value: { used: 1 },
 	});
 });
 

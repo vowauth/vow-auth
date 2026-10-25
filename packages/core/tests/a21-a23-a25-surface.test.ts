@@ -56,7 +56,6 @@ test("A21, A25: the public surface is exactly this, so a new export or a weakeni
 		"assertLimit",
 		"canonicalizeEmail",
 		"createAuth",
-		"createLimiter",
 		"createRedirectPolicy",
 		"defineDuration",
 		"defineMeterRule",

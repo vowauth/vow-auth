@@ -2,7 +2,6 @@ import {
 	AUDIT_EVENTS,
 	AUDIT_OUTCOMES,
 	AUDIT_REASONS,
-	type AuditOutcome,
 	type AuditSink,
 	report,
 } from "../audit.js";
@@ -75,30 +74,12 @@ export type MeterRefusal =
 	| { readonly code: typeof ERROR_CODES.invalidRequest }
 	| { readonly code: typeof ERROR_CODES.unavailable };
 
-/** What `observe` saw: the reading, and whether `consume` would have refused. */
-export type MeterObservation = MeterReading & {
-	readonly wouldRefuse: boolean;
-};
-
-/** Counts requests against limits that all instances share. */
 export type Meter = {
 	consume(
 		scope: MeterScope,
 		rule: MeterRule,
 		cost?: number,
 	): Promise<Result<MeterReading, MeterRefusal>>;
-	/**
-	 * Counts like `consume` but never refuses: a request that `consume` would
-	 * refuse is let through and recorded in the audit as an observation. Use it
-	 * to roll out a new limit: watch how often it would refuse real traffic,
-	 * calibrate the numbers, then swap the call for `consume`. Counting is the
-	 * same as for `consume`, so what is observed is what would be enforced.
-	 */
-	observe(
-		scope: MeterScope,
-		rule: MeterRule,
-		cost?: number,
-	): Promise<Result<MeterObservation, MeterRefusal>>;
 };
 
 /** Options for creating the meter. */
@@ -152,14 +133,13 @@ export function createMeter(options: MeterOptions): Meter {
 	};
 
 	const record = (
-		outcome: AuditOutcome,
 		scope: MeterScope,
 		rule: MeterRule,
 		answer: MeterStoreResult,
 	) => {
 		return report(audit, {
 			event: AUDIT_EVENTS.meterConsume,
-			outcome,
+			outcome: AUDIT_OUTCOMES.refusal,
 			reason:
 				answer.refusedForCapacity === true
 					? AUDIT_REASONS.capacity
@@ -185,7 +165,7 @@ export function createMeter(options: MeterOptions): Meter {
 			const answer = decided.value;
 
 			if (!answer.allowed) {
-				await record(AUDIT_OUTCOMES.refusal, scope, rule, answer);
+				await record(scope, rule, answer);
 
 				return fail({
 					code: ERROR_CODES.rateLimited,
@@ -194,26 +174,6 @@ export function createMeter(options: MeterOptions): Meter {
 			}
 
 			return succeed({
-				used: answer.used,
-				remaining: answer.remaining,
-				resetsAtMilliseconds: answer.resetsAtMilliseconds,
-			});
-		},
-		async observe(scope, rule, cost = 1) {
-			const decided = await decide(scope, rule, cost);
-
-			if (!decided.ok) {
-				return fail(decided.error);
-			}
-
-			const answer = decided.value;
-
-			if (!answer.allowed) {
-				await record(AUDIT_OUTCOMES.observation, scope, rule, answer);
-			}
-
-			return succeed({
-				wouldRefuse: !answer.allowed,
 				used: answer.used,
 				remaining: answer.remaining,
 				resetsAtMilliseconds: answer.resetsAtMilliseconds,

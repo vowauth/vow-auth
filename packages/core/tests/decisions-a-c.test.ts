@@ -23,16 +23,6 @@ afterEach(() => {
 const RULE = meterRuleOf({ limit: 3, windowMilliseconds: 1_000 });
 const SCOPE = { tenant: "acme", actor: "alice", resource: "email-link" };
 
-const unwrap = <Value>(
-	result: { readonly ok: true; readonly value: Value } | { readonly ok: false },
-): Value => {
-	if (!result.ok) {
-		throw new Error("the meter must accept this rule");
-	}
-
-	return result.value;
-};
-
 const collect = () => {
 	const records: AuditRecord[] = [];
 	const sink: AuditSink = async (record) => {
@@ -41,68 +31,6 @@ const collect = () => {
 
 	return { records, sink };
 };
-
-test("C4: observe never refuses and records only what enforcement would have refused", async () => {
-	const { records, sink } = collect();
-	const meter = createMeter({
-		store: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
-		audit: sink,
-	});
-	const seen = [];
-
-	for (let request = 0; request < 5; request += 1) {
-		seen.push(unwrap(await meter.observe(SCOPE, RULE)));
-	}
-
-	expect(seen.map((observation) => observation.wouldRefuse)).toEqual([
-		false,
-		false,
-		false,
-		true,
-		true,
-	]);
-	expect(seen[3]?.resetsAtMilliseconds).toBeGreaterThan(Date.now());
-	expect(
-		records.map((record) => [record.event, record.outcome, record.reason]),
-	).toEqual([
-		["meter.consume", "observation", "limit-exceeded"],
-		["meter.consume", "observation", "limit-exceeded"],
-	]);
-});
-
-test("C4: what observe sees is exactly what consume would enforce on the same traffic", async () => {
-	const observed = createMeter({
-		store: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
-	});
-	const enforced = createMeter({
-		store: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
-	});
-
-	for (const step of [0, 0, 0, 0, 400, 300, 0, 600, 1_000, 0, 0]) {
-		vi.setSystemTime(Date.now() + step);
-
-		const watching = unwrap(await observed.observe(SCOPE, RULE));
-		const enforcing = await enforced.consume(SCOPE, RULE);
-
-		expect(watching.wouldRefuse).toBe(!enforcing.ok);
-	}
-});
-
-test("C4: observe still refuses nothing when the store is full, and says why", async () => {
-	const { records, sink } = collect();
-	const meter = createMeter({
-		store: createMemoryMeterStore({ maximumBytes: 700 }),
-		audit: sink,
-	});
-
-	for (const actor of ["a", "b", "c"]) {
-		await meter.observe({ ...SCOPE, actor }, RULE);
-	}
-
-	expect(records.map((record) => [record.outcome, record.reason])).toEqual([
-		["observation", "capacity"],
-	]);
-});
 
 test("D4: a request refused because the store is full is told apart from one over the limit", async () => {
 	const { records, sink } = collect();

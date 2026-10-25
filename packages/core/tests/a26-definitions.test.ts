@@ -78,10 +78,8 @@ test("A26: defining a meter rule never throws, and a rule it accepts never makes
 				}
 
 				const consumed = await meter.consume(scope, defined.value, cost);
-				const observed = await meter.observe(scope, defined.value, cost);
 
 				expect(typeof consumed.ok).toBe("boolean");
-				expect(typeof observed.ok).toBe("boolean");
 			},
 		),
 		{ numRuns: 500 },

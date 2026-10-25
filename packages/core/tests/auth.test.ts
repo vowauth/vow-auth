@@ -84,14 +84,16 @@ test("one sink reaches every part of the core", async () => {
 		throw new Error("the sign in must pass");
 	}
 
-	await auth.meter.consume(
-		{ tenant: "acme", actor: "alice", resource: "email-link" },
-		meterRuleOf({ limit: 1, windowMilliseconds: 1_000 }),
-	);
-	await auth.meter.consume(
-		{ tenant: "acme", actor: "alice", resource: "email-link" },
-		meterRuleOf({ limit: 1, windowMilliseconds: 1_000 }),
-	);
+	const limiter = auth.createLimiter<string>({
+		rule: meterRuleOf({ limit: 1, windowMilliseconds: 1_000 }),
+		scopes: (actor) => [{ tenant: "acme", actor, resource: "email-link" }],
+	});
+
+	expect((await limiter("alice")).ok).toBe(true);
+	expect(await limiter("alice")).toMatchObject({
+		ok: false,
+		error: { code: "rate-limited" },
+	});
 	await auth.sessions.verify("1.garbage");
 	await auth.sessions.revoke({ tenant: "acme", scope: "tenant" });
 	await auth.mutateIdentity("acme", signedIn.value.subject, { type: "delete" });

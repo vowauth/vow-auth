@@ -22,7 +22,6 @@ export const AUDIT_EVENTS = {
  * that it would have refused.
  */
 export const AUDIT_OUTCOMES = {
-	observation: "observation",
 	refusal: "refusal",
 	success: "success",
 } as const;

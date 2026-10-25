@@ -4,7 +4,12 @@ import {
 	createMutateIdentity,
 	type MutateIdentity,
 } from "./identity/mutate-identity.js";
-import { createMeter, type Meter } from "./meter/meter.js";
+import {
+	createLimiter,
+	type Limiter,
+	type LimiterOptions,
+} from "./meter/limiter.js";
+import { createMeter } from "./meter/meter.js";
 import type { MeterStore } from "./meter/meter-store.js";
 import { createSealer, type Sealer, type SecretVersion } from "./sealer.js";
 import type { EpochStore } from "./session-tokens/epoch-store.js";
@@ -76,8 +81,14 @@ export type Auth = {
 	 * agent token, whatever the purpose.
 	 */
 	readonly sealer: Sealer;
-	/** Counts requests against limits shared by every instance. */
-	readonly meter: Meter;
+	/**
+	 * Creates a limiter for the attempts of the engine's own routes: sign in,
+	 * links to send, codes to guess. Give the same limiter to every handler
+	 * and factor that needs it; it counts in the meter store of the engine.
+	 */
+	createLimiter<Input>(
+		options: Omit<LimiterOptions<Input>, "meter">,
+	): Limiter<Input>;
 	/** Deletes subjects and confirms emails, with every consequence. */
 	readonly mutateIdentity: MutateIdentity;
 };
@@ -143,7 +154,8 @@ export function createAuth(options: AuthOptions): Auth {
 			verify: sessionTokens.verifyAgent,
 		},
 		tokens,
-		meter,
+		createLimiter: (limiterOptions) =>
+			createLimiter({ ...limiterOptions, meter }),
 		sealer,
 		mutateIdentity,
 	};

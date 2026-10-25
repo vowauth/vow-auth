@@ -7,12 +7,11 @@ import {
 import {
 	type Auth,
 	createAuth,
-	createLimiter,
 	type Factor,
 	requireFactor,
 	succeed,
 } from "@vow-auth/core";
-import { createMeter } from "@vow-auth/core/internal";
+import { createLimiter, createMeter } from "@vow-auth/core/internal";
 import {
 	createBearerHandler,
 	createCookieHandler,

@@ -1,12 +1,6 @@
 import { createMemoryMeterStore } from "@vow-auth/adapter-memory";
-import {
-	applyLimit,
-	assertLimit,
-	createLimiter,
-	type Limit,
-	NO_LIMIT,
-} from "@vow-auth/core";
-import { createMeter } from "@vow-auth/core/internal";
+import { applyLimit, assertLimit, type Limit, NO_LIMIT } from "@vow-auth/core";
+import { createLimiter, createMeter } from "@vow-auth/core/internal";
 import { meterRuleOf } from "@vow-auth/test-support";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 

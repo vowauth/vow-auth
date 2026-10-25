@@ -4,8 +4,8 @@ import {
 	createMemoryMeterStore,
 	createMemoryTokenStore,
 } from "@vow-auth/adapter-memory";
-import { createLimiter } from "@vow-auth/core";
 import {
+	createLimiter,
 	createMeter,
 	createSealer,
 	createSessionTokens,
