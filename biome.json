@@ -7,7 +7,7 @@
 	},
 	"files": {
 		"ignoreUnknown": false,
-		"includes": ["**", "!examples/flow-map/flow-data.js"]
+		"includes": ["**"]
 	},
 	"formatter": {
 		"enabled": true,

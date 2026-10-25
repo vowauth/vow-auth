@@ -16,7 +16,6 @@ import {
 	type Factor,
 	succeed,
 } from "@vow-auth/core";
-import { runDoctor } from "@vow-auth/doctor";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
@@ -327,30 +326,5 @@ describe.runIf(databaseUrl !== undefined)("postgres specifics", () => {
 				})
 			).ok,
 		).toBe(true);
-	});
-
-	test("the doctor finds nothing wrong with the Postgres stores", async () => {
-		const report = await runDoctor({
-			options: {
-				identities: createPostgresIdentityStore(run),
-				tokenStore: createPostgresTokenStore(run),
-				epochs: createMemoryEpochStore({ maximumBytes: 1_000_000 }),
-				meterStore: createMemoryMeterStore({ maximumBytes: 1_000_000 }),
-				secrets: [
-					{
-						version: 1,
-						value: Buffer.from(
-							crypto.getRandomValues(new Uint8Array(32)),
-						).toString("base64"),
-					},
-				],
-				maximumLifeTimeMilliseconds: HOUR,
-				sessionTimeToLiveMilliseconds: HOUR,
-				policy: () => "deny",
-				audit: async () => undefined,
-			},
-		});
-
-		expect(report.findings).toEqual([]);
 	});
 });

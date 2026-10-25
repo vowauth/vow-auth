@@ -13,17 +13,11 @@ export default defineConfig({
 			"@vow-auth/adapter-memory": fileURLToPath(
 				new URL("./packages/adapter-memory/src/index.ts", import.meta.url),
 			),
-			"@vow-auth/doctor": fileURLToPath(
-				new URL("./packages/doctor/src/index.ts", import.meta.url),
-			),
 			"@vow-auth/adapter-postgres": fileURLToPath(
 				new URL("./packages/adapter-postgres/src/index.ts", import.meta.url),
 			),
 			"@vow-auth/http": fileURLToPath(
 				new URL("./packages/http/src/index.ts", import.meta.url),
-			),
-			"@vow-auth/service": fileURLToPath(
-				new URL("./packages/service/src/index.ts", import.meta.url),
 			),
 			"@vow-auth/test-support": fileURLToPath(
 				new URL("./packages/test-support/src/index.ts", import.meta.url),

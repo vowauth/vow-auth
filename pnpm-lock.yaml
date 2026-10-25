@@ -188,8 +188,6 @@ importers:
         specifier: ^5.0.3
         version: 5.0.3(@types/node@26.6.4)(vite@8.3.3(@types/node@26.6.4)(jiti@2.7.0)(yaml@2.9.1))
 
-  examples/flow-map: {}
-
   examples/playground:
     dependencies:
       '@vetojs/core':
@@ -259,18 +257,6 @@ importers:
 
   packages/core: {}
 
-  packages/doctor:
-    devDependencies:
-      '@types/node':
-        specifier: ^26.6.4
-        version: 26.6.4
-      '@vow-auth/adapter-memory':
-        specifier: workspace:*
-        version: link:../adapter-memory
-      '@vow-auth/core':
-        specifier: workspace:*
-        version: link:../core
-
   packages/factor-email-link:
     devDependencies:
       '@vow-auth/adapter-memory':
@@ -300,15 +286,6 @@ importers:
       '@vow-auth/test-support':
         specifier: workspace:*
         version: link:../test-support
-
-  packages/service:
-    devDependencies:
-      '@vow-auth/adapter-memory':
-        specifier: workspace:*
-        version: link:../adapter-memory
-      '@vow-auth/core':
-        specifier: workspace:*
-        version: link:../core
 
   packages/store-contracts:
     devDependencies:
