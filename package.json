@@ -24,13 +24,13 @@
 	"keywords": [],
 	"author": "",
 	"devDependencies": {
-		"@biomejs/biome": "^2.5.15",
-		"@types/node": "^26.6.4",
+		"@biomejs/biome": "^2.6.2",
+		"@types/node": "^26.6.5",
 		"fast-check": "^4.10.2",
 		"knip": "^6.43.0",
 		"simple-git-hooks": "^2.14.0",
-		"typescript": "^6.0.3",
-		"vitest": "^5.0.3"
+		"typescript": "^7.0.2",
+		"vitest": "^5.0.5"
 	},
 	"simple-git-hooks": {
 		"pre-commit": "pnpm exec biome check --staged --no-errors-on-unmatched",
