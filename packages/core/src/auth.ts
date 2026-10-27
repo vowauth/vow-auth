@@ -6,6 +6,10 @@ import {
 	type Tenants,
 } from "./accounts/manage.js";
 import { createRecords } from "./accounts/records.js";
+import {
+	createSigningKeys,
+	type SigningKeyRotation,
+} from "./accounts/signing-keys.js";
 import type { AuditSink } from "./audit.js";
 import { createDevices, type Devices } from "./devices.js";
 import type { FactorPlugin } from "./factor.js";
@@ -21,6 +25,7 @@ import type { MeterStore } from "./meter/meter-store.js";
 import { EMAIL_PROVIDER, type Factor } from "./proof.js";
 import { createRecordSeal } from "./record-seal.js";
 import { createSealer, type SecretVersion } from "./sealer.js";
+import { createSecretBox } from "./secret-box.js";
 import { isStorableText } from "./shared/is-storable-text.js";
 import { own } from "./shared/own.js";
 import {
@@ -34,6 +39,7 @@ import type { TokenStore } from "./tokens/token-store.js";
 import { createTokens } from "./tokens/tokens.js";
 
 const DEVICE_LIFE_TIME_MILLISECONDS = 400 * 24 * 60 * 60 * 1_000;
+const SIGNING_KEY_PROPAGATION_MILLISECONDS = 24 * 60 * 60 * 1_000;
 const FACTOR_ID = /^[a-z][a-z0-9-]{0,62}$/;
 
 /** The factors of an engine by id, as plugins. */
@@ -85,6 +91,13 @@ export type AuthOptions<Factors extends AuthFactors = AuthFactors> = {
 	 * verdict becomes a deny.
 	 */
 	readonly stepUpTimeToLiveMilliseconds?: number | undefined;
+	/**
+	 * How long the next signing key of a tenant is published before a rotation
+	 * lets it sign: at least as long as relying parties keep a key set they
+	 * fetched, and as the longest lifetime of a token the keys sign, since a
+	 * rotation drops the previous key. 24 hours when left out.
+	 */
+	readonly signingKeyPropagationMilliseconds?: number | undefined;
 	/**
 	 * Answers `"allow"` to let a sign in create an account or a membership, or
 	 * bring a removed one back; anything else refuses, and nothing is written.
@@ -142,8 +155,11 @@ export type Auth<Factors extends AuthFactors = AuthFactors> = {
 	createLimiter<Input>(
 		options: Omit<LimiterOptions<Input>, "meter">,
 	): Limiter<Input>;
-	/** Tenants: a sign in reaches only one that the application created and did not disable. */
-	readonly tenants: Tenants;
+	/**
+	 * Tenants: a sign in reaches only one that the application created and did
+	 * not disable. Each has signing keys from its first rotation on.
+	 */
+	readonly tenants: Tenants & SigningKeyRotation;
 	/** Accounts, which only a sign in creates; the application deletes them. */
 	readonly accounts: Accounts;
 	/** Memberships, which only a sign in creates; the application suspends, removes and restores them. */
@@ -272,6 +288,19 @@ export function createAuth<const Factors extends AuthFactors>(
 		);
 	}
 
+	const propagationMilliseconds =
+		own(options, "signingKeyPropagationMilliseconds") ??
+		SIGNING_KEY_PROPAGATION_MILLISECONDS;
+
+	if (
+		!Number.isFinite(propagationMilliseconds) ||
+		propagationMilliseconds <= 0
+	) {
+		throw new RangeError(
+			"signingKeyPropagationMilliseconds must be a positive number",
+		);
+	}
+
 	const meter = createMeter({ store: options.meterStore, audit });
 	const coreSealer = createSealer({
 		secrets: options.secrets,
@@ -318,6 +347,13 @@ export function createAuth<const Factors extends AuthFactors>(
 		},
 		audit,
 	});
+	const signingKeys = createSigningKeys({
+		store: options.accounts,
+		records,
+		box: createSecretBox({ secrets: options.secrets }),
+		propagationMilliseconds,
+		audit,
+	});
 
 	const flow = createSignInFlow({
 		factors,
@@ -350,7 +386,11 @@ export function createAuth<const Factors extends AuthFactors>(
 			timeToLiveMilliseconds: DEVICE_LIFE_TIME_MILLISECONDS,
 		}),
 		createLimiter: limiterFor,
-		tenants: management.tenants,
+		tenants: {
+			...management.tenants,
+			rotateSigningKey: signingKeys.rotateSigningKey,
+			revokeSigningKey: signingKeys.revokeSigningKey,
+		},
 		accounts: management.accounts,
 		memberships: management.memberships,
 	};

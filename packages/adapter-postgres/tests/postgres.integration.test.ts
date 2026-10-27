@@ -121,6 +121,7 @@ describe.runIf(databaseUrl !== undefined)("postgres specifics", () => {
 				"vow_auth_accounts",
 				"vow_auth_grants",
 				"vow_auth_identities",
+				"vow_auth_signing_keys",
 				"vow_auth_subjects",
 				"vow_auth_tenants",
 				"vow_auth_tokens",

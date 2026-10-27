@@ -163,7 +163,11 @@ export function createManagement(options: ManagementOptions): {
 			await record(event, AUDIT_OUTCOMES.success, reason, id, "");
 		}
 
-		const next = await records.tenant({ id, disabled });
+		const next = await records.tenant({
+			...current,
+			disabled,
+			version: current.version + 1,
+		});
 
 		if (!(await store.setTenant(next, current.seal))) {
 			return refuse(
@@ -283,7 +287,12 @@ export function createManagement(options: ManagementOptions): {
 				);
 
 				const created = await store.createTenant(
-					await records.tenant({ id, disabled: false }),
+					await records.tenant({
+						id,
+						disabled: false,
+						version: 1,
+						signingKeys: [],
+					}),
 				);
 
 				return created === "created"

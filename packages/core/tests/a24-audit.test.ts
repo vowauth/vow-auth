@@ -585,6 +585,8 @@ test("the core reports exactly the documented events", () => {
 		"session.revoke",
 		"session.verify",
 		"signin.continue",
+		"signing-key.change",
+		"signing-key.load",
 		"tenant.change",
 		"token.consume",
 		"token.issue",

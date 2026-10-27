@@ -1,8 +1,39 @@
+/** Where a signing key of a tenant stands: published ahead of use, signing, or kept only to check what it signed. */
+export type SigningKeyState = "next" | "current" | "previous";
+
+/** The id and state of a signing key, as the seal of its tenant covers them. */
+export type TenantSigningKey = {
+	readonly kid: string;
+	readonly state: SigningKeyState;
+};
+
 /** A tenant as the store keeps it. */
 export type StoredTenant = {
 	readonly id: string;
 	readonly disabled: boolean;
+	/** Grows by one with every change the engine makes, so whatever was built from the tenant knows when to be built again. */
+	readonly version: number;
+	/** Its signing keys by kid, read from the keys themselves; they change only through `setSigningKeys`. */
+	readonly signingKeys: readonly TenantSigningKey[];
 	readonly seal: string;
+};
+
+/** A signing key of a tenant as the store keeps it. */
+export type StoredSigningKey = TenantSigningKey & {
+	/** The private JWK, sealed for its tenant and kid; the public key is part of it. */
+	readonly privateKey: string;
+	/** When the store first kept the key, by its clock. Not sealed: it only holds back the next rotation. */
+	readonly publishedAtMilliseconds: number;
+};
+
+/** A signing key to write; the store sets the time it is published. */
+export type NewSigningKey = Omit<StoredSigningKey, "publishedAtMilliseconds">;
+
+/** A tenant with its signing keys by kid, read at once, and the store's time. */
+export type SigningKeyReading = {
+	readonly tenant: StoredTenant;
+	readonly keys: readonly StoredSigningKey[];
+	readonly now: number;
 };
 
 /** A person in the data zone of this deployment, one across all tenants. */
@@ -48,13 +79,30 @@ export type StoredMembership = {
  * first-wins: on a conflict nothing changes and the call says so. `set*` and
  * `updateIdentity` are compare-and-set on the seal the caller read: a row that
  * changed in between is left alone and the call answers `false`. Seals are
- * opaque to the store; it keeps and returns them as they are. An adapter must
- * guarantee all of this; a backend that cannot is not a valid account store.
+ * opaque to the store; it keeps and returns them as they are. A tenant lists
+ * its signing keys by kid in the order of their code units, as JavaScript
+ * sorts strings; `createTenant` and `setTenant` write the tenant alone, and
+ * only `setSigningKeys` changes its keys. An adapter must guarantee all of
+ * this; a backend that cannot is not a valid account store.
  */
 export type AccountStore = {
 	getTenant(id: string): Promise<StoredTenant | undefined>;
+	/** A new tenant has no signing keys, whatever its record lists. */
 	createTenant(tenant: StoredTenant): Promise<"created" | "conflict">;
 	setTenant(tenant: StoredTenant, expectedSeal: string): Promise<boolean>;
+	/** The tenant and its signing keys by kid, read at once; `undefined` when there is no such tenant. */
+	getSigningKeys(tenant: string): Promise<SigningKeyReading | undefined>;
+	/**
+	 * At once, and only when the tenant still has `expectedSeal`: writes the
+	 * tenant and makes its keys exactly `keys`. A key left out is deleted, a new
+	 * one is published at the store's time, and one that stays keeps its time.
+	 * `false` when the tenant changed or does not exist; nothing is written then.
+	 */
+	setSigningKeys(
+		tenant: StoredTenant,
+		expectedSeal: string,
+		keys: readonly NewSigningKey[],
+	): Promise<boolean>;
 
 	findIdentity(
 		provider: string,

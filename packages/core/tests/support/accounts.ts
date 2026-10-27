@@ -24,7 +24,14 @@ export const createAccounts = async (
 	const records = createRecords(createRecordSeal({ secrets }));
 
 	for (const id of tenants) {
-		await store.createTenant(await records.tenant({ id, disabled: false }));
+		await store.createTenant(
+			await records.tenant({
+				id,
+				disabled: false,
+				version: 1,
+				signingKeys: [],
+			}),
+		);
 	}
 
 	return { store, records };

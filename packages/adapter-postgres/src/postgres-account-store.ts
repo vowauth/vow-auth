@@ -1,23 +1,43 @@
 import type {
 	AccountStore,
 	MembershipStatus,
+	SigningKeyState,
 	StoredAccount,
 	StoredIdentity,
 	StoredMembership,
+	StoredSigningKey,
 	StoredTenant,
 } from "@vow-auth/core";
 import {
 	type PostgresRow,
 	type PostgresRunner,
 	SERVER_NOW_MILLISECONDS,
+	toNumber,
 	toText,
 } from "./postgres-runner.js";
 
-const GET_TENANT = `select id, disabled_at_milliseconds is not null as disabled, seal
-	from vow_auth_tenants where id = $1`;
+const SIGNING_KEYS_OF_TENANT = `coalesce((
+		select json_agg(json_build_object(
+			'kid', key.kid,
+			'state', key.state,
+			'privateKey', key.private_key,
+			'publishedAtMilliseconds', key.published_at_milliseconds
+		) order by key.kid collate "C")
+		from vow_auth_signing_keys as key where key.tenant = tenant.id
+	), '[]')`;
 
-const CREATE_TENANT = `insert into vow_auth_tenants (id, disabled_at_milliseconds, seal)
-	values ($1, case when $2::boolean then ${SERVER_NOW_MILLISECONDS} end, $3)
+const TENANT_COLUMNS = `tenant.id,
+	tenant.disabled_at_milliseconds is not null as disabled,
+	tenant.version, tenant.seal, ${SIGNING_KEYS_OF_TENANT} as signing_keys`;
+
+const GET_TENANT = `select ${TENANT_COLUMNS}
+	from vow_auth_tenants as tenant where tenant.id = $1`;
+
+const GET_SIGNING_KEYS = `select ${TENANT_COLUMNS}, ${SERVER_NOW_MILLISECONDS} as now
+	from vow_auth_tenants as tenant where tenant.id = $1`;
+
+const CREATE_TENANT = `insert into vow_auth_tenants (id, disabled_at_milliseconds, version, seal)
+	values ($1, case when $2::boolean then ${SERVER_NOW_MILLISECONDS} end, $3, $4)
 	on conflict (id) do nothing
 	returning id`;
 
@@ -25,9 +45,24 @@ const SET_TENANT = `update vow_auth_tenants
 	set disabled_at_milliseconds = case
 			when $2::boolean then coalesce(disabled_at_milliseconds, ${SERVER_NOW_MILLISECONDS})
 		end,
-		seal = $3
-	where id = $1 and seal = $4
+		version = $3,
+		seal = $4
+	where id = $1 and seal = $5
 	returning id`;
+
+const SET_SIGNING_KEYS = `with written as (
+	${SET_TENANT}
+), removed as (
+	delete from vow_auth_signing_keys
+	where tenant = (select id from written) and kid <> all($6::text[])
+), kept as (
+	insert into vow_auth_signing_keys (tenant, kid, state, private_key)
+	select written.id, key.kid, key.state, key.private_key
+	from written, unnest($6::text[], $7::text[], $8::text[]) as key (kid, state, private_key)
+	on conflict (tenant, kid) do update
+	set state = excluded.state, private_key = excluded.private_key
+)
+select count(*)::int as tenants from written`;
 
 const IDENTITY_COLUMNS =
 	"provider, external_id, account_id, email, email_verified, seal";
@@ -180,9 +215,51 @@ const toStatus = (value: unknown): MembershipStatus => {
 	return status;
 };
 
+const SIGNING_KEY_STATES: readonly SigningKeyState[] = [
+	"next",
+	"current",
+	"previous",
+];
+
+const toSigningKeys = (value: unknown): StoredSigningKey[] => {
+	const parsed: unknown = typeof value === "string" ? JSON.parse(value) : value;
+
+	if (!Array.isArray(parsed)) {
+		throw new Error("The database must answer the signing keys with a list");
+	}
+
+	return parsed.map((entry: unknown): StoredSigningKey => {
+		if (typeof entry !== "object" || entry === null) {
+			throw new Error("The database answered a signing key it cannot hold");
+		}
+
+		const field = (name: string): unknown => Reflect.get(entry, name);
+		const state = SIGNING_KEY_STATES.find(
+			(candidate) => candidate === field("state"),
+		);
+		const publishedAtMilliseconds = toNumber(field("publishedAtMilliseconds"));
+
+		if (state === undefined || !Number.isSafeInteger(publishedAtMilliseconds)) {
+			throw new Error("The database answered a signing key it cannot hold");
+		}
+
+		return {
+			kid: toText(field("kid")),
+			state,
+			privateKey: toText(field("privateKey")),
+			publishedAtMilliseconds,
+		};
+	});
+};
+
 const tenantOf = (row: PostgresRow): StoredTenant => ({
 	id: toText(row.id),
 	disabled: toBoolean(row.disabled),
+	version: toNumber(row.version),
+	signingKeys: toSigningKeys(row.signing_keys).map((key) => ({
+		kid: key.kid,
+		state: key.state,
+	})),
 	seal: toText(row.seal),
 });
 
@@ -212,7 +289,10 @@ const membershipOf = (row: PostgresRow): StoredMembership => ({
 
 /**
  * Account store on Postgres. Every method is one statement, so each is atomic
- * on its own, and a runner bound to a transaction makes them part of it. The
+ * on its own, and a runner bound to a transaction makes them part of it. A
+ * tenant is read with its signing keys in the same statement, and written
+ * with them in the same statement, keys ordered by kid in the "C" collation,
+ * as JavaScript sorts strings. The
  * primary key of an identity is `(provider, external_id)` and a membership is
  * unique for `(tenant, account_id)`; a conflict on either leaves the rows as
  * they are and the call says so. Creating an account inserts its identity
@@ -259,6 +339,7 @@ export function createPostgresAccountStore(run: PostgresRunner): AccountStore {
 			const rows = await run(CREATE_TENANT, [
 				tenant.id,
 				tenant.disabled,
+				tenant.version,
 				tenant.seal,
 			]);
 
@@ -268,11 +349,32 @@ export function createPostgresAccountStore(run: PostgresRunner): AccountStore {
 			const rows = await run(SET_TENANT, [
 				tenant.id,
 				tenant.disabled,
+				tenant.version,
 				tenant.seal,
 				expectedSeal,
 			]);
 
 			return rows.length > 0;
+		},
+		getSigningKeys: (id) =>
+			one(GET_SIGNING_KEYS, [id], (row) => ({
+				tenant: tenantOf(row),
+				keys: toSigningKeys(row.signing_keys),
+				now: toNumber(row.now),
+			})),
+		async setSigningKeys(tenant, expectedSeal, keys) {
+			const rows = await run(SET_SIGNING_KEYS, [
+				tenant.id,
+				tenant.disabled,
+				tenant.version,
+				tenant.seal,
+				expectedSeal,
+				keys.map((key) => key.kid),
+				keys.map((key) => key.state),
+				keys.map((key) => key.privateKey),
+			]);
+
+			return Number(rows[0]?.tenants) === 1;
 		},
 		findIdentity,
 		findVerifiedOwner: (email, providers) =>

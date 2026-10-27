@@ -10,16 +10,27 @@ import {
  * application points at a person in a tenant with a foreign key to
  * `vow_auth_subjects (id)`. A subject is never deleted behind the back of the
  * application: removing it from the tenant only changes its status, and
- * deleting its account leaves it without one. Grants keep the ids of accounts,
- * tenants and subjects without foreign keys, so they can live in another
- * store; the engine deletes the grants of an account it deletes.
+ * deleting its account leaves it without one. A signing key keeps its private
+ * key sealed; the seal of its tenant covers its kid and state. Grants keep
+ * the ids of accounts, tenants and subjects without foreign keys, so they can
+ * live in another store; the engine deletes the grants of an account it
+ * deletes.
  */
 export const POSTGRES_SCHEMA_STATEMENTS: readonly string[] = [
 	`create table if not exists vow_auth_tenants (
 	id text primary key,
+	version bigint not null,
 	created_at_milliseconds bigint not null default ${SERVER_NOW_MILLISECONDS},
 	disabled_at_milliseconds bigint,
 	seal text not null
+)`,
+	`create table if not exists vow_auth_signing_keys (
+	tenant text not null references vow_auth_tenants (id),
+	kid text not null,
+	state text not null check (state in ('next', 'current', 'previous')),
+	private_key text not null,
+	published_at_milliseconds bigint not null default ${SERVER_NOW_MILLISECONDS},
+	primary key (tenant, kid)
 )`,
 	`create table if not exists vow_auth_accounts (
 	id text primary key,

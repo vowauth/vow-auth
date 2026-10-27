@@ -88,12 +88,13 @@ test("A21, A25: the public surface is exactly this, so a new export or a weakeni
 		maximumLifeTimeMilliseconds: true,
 		sessionTimeToLiveMilliseconds: true,
 		stepUpTimeToLiveMilliseconds: true,
+		signingKeyPropagationMilliseconds: true,
 		registration: true,
 		policy: true,
 		audit: true,
 	} satisfies Record<keyof AuthOptions, true>;
 
-	expect(Object.keys(optionKeys)).toHaveLength(13);
+	expect(Object.keys(optionKeys)).toHaveLength(14);
 });
 
 test("A25: an unknown option is a compile error, not silence", () => {

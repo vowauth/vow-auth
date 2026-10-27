@@ -5,15 +5,23 @@ import type {
 	StoredIdentity,
 	StoredMembership,
 	StoredTenant,
+	TenantSigningKey,
 } from "./account-store.js";
 
 /** A record before the engine sealed it. */
 export type Unsealed<Record> = Omit<Record, "seal">;
 
+const byKid = (keys: readonly TenantSigningKey[]): TenantSigningKey[] =>
+	[...keys].sort((left, right) =>
+		left.kid < right.kid ? -1 : left.kid > right.kid ? 1 : 0,
+	);
+
 const tenantFields = (tenant: Unsealed<StoredTenant>) => [
 	"tenant",
 	tenant.id,
 	tenant.disabled,
+	tenant.version,
+	JSON.stringify(byKid(tenant.signingKeys).map((key) => [key.kid, key.state])),
 ];
 
 const accountFields = (account: Unsealed<StoredAccount>) => [
@@ -58,9 +66,12 @@ const grantFields = (grant: Unsealed<StoredGrant>) => [
 
 /**
  * Seals and checks each kind of record. The kind is the first field, so a
- * seal of one kind never passes for another. The eviction mark of an account
- * is not sealed: it only takes access away, and an evicted account has no
- * identity left to sign in with. Neither are the revocation mark and the idle
+ * seal of one kind never passes for another. A tenant's seal covers its
+ * version and the id and state of each of its signing keys, so a key row
+ * brought back or changed past the engine breaks the seal of its tenant. The
+ * eviction mark of an account is not sealed: it only takes access away, and
+ * an evicted account has no identity left to sign in with. Neither are the
+ * revocation mark and the idle
  * end of a grant: the first only takes access away, the second moves while a
  * session is used and never past the end, which is sealed.
  */
@@ -70,6 +81,12 @@ export const createRecords = (seal: RecordSeal) => {
 			return Object.freeze({
 				id: tenant.id,
 				disabled: tenant.disabled,
+				version: tenant.version,
+				signingKeys: Object.freeze(
+					byKid(tenant.signingKeys).map((key) =>
+						Object.freeze({ kid: key.kid, state: key.state }),
+					),
+				),
 				seal: await seal.seal(tenantFields(tenant)),
 			});
 		},

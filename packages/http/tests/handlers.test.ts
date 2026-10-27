@@ -40,7 +40,14 @@ const accountsWithTenant = (): AccountStore => {
 	const records = createRecords(createRecordSeal({ secrets: SECRETS }));
 	const ready = Promise.all(
 		[TENANT, OTHER_TENANT].map(async (id) =>
-			store.createTenant(await records.tenant({ id, disabled: false })),
+			store.createTenant(
+				await records.tenant({
+					id,
+					disabled: false,
+					version: 1,
+					signingKeys: [],
+				}),
+			),
 		),
 	);
 	const waiting: Record<string, unknown> = {};

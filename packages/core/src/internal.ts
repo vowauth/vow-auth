@@ -14,6 +14,13 @@ export {
 	type Records,
 	type Unsealed,
 } from "./accounts/records.js";
+export {
+	createSigningKeys,
+	type OpenedSigningKey,
+	type PrivateSigningJwk,
+	type SigningKeysOptions,
+	type TenantSigningKeys,
+} from "./accounts/signing-keys.js";
 export { type EvaluatePolicyOptions, evaluatePolicy } from "./decision.js";
 export {
 	createGrants,
@@ -44,6 +51,7 @@ export {
 	type SealDomain,
 	type SealerOptions,
 } from "./sealer.js";
+export { createSecretBox, type SecretBox } from "./secret-box.js";
 export { issueSession } from "./session.js";
 export {
 	createSignIn,

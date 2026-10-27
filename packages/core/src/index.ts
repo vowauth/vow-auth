@@ -1,10 +1,15 @@
 export type {
 	AccountStore,
 	MembershipStatus,
+	NewSigningKey,
+	SigningKeyReading,
+	SigningKeyState,
 	StoredAccount,
 	StoredIdentity,
 	StoredMembership,
+	StoredSigningKey,
 	StoredTenant,
+	TenantSigningKey,
 } from "./accounts/account-store.js";
 export type {
 	Accounts,
@@ -18,6 +23,7 @@ export {
 	RESOLUTION_OUTCOMES,
 	type ResolutionOutcome,
 } from "./accounts/plan.js";
+export type { SigningKeyRotation } from "./accounts/signing-keys.js";
 export {
 	AUDIT_EVENTS,
 	AUDIT_OUTCOMES,

@@ -3,10 +3,16 @@ import type {
 	StoredAccount,
 	StoredIdentity,
 	StoredMembership,
+	StoredSigningKey,
 	StoredTenant,
 } from "@vow-auth/core";
 
 type IdentityRow = StoredIdentity & { readonly seq: number };
+
+type TenantRow = Omit<StoredTenant, "signingKeys">;
+
+const byKid = (left: StoredSigningKey, right: StoredSigningKey): number =>
+	left.kid < right.kid ? -1 : left.kid > right.kid ? 1 : 0;
 
 const identityKey = (provider: string, externalId: string): string =>
 	JSON.stringify([provider, externalId]);
@@ -16,8 +22,9 @@ const pairKey = (tenant: string, accountId: string): string =>
 
 /**
  * In-process account store for tests and single-instance development. It
- * keeps tenants, accounts, one row per identity in order of arrival and one
- * row per membership, exactly as the Postgres store does, so the two answer
+ * keeps tenants and their signing keys apart, accounts, one row per identity
+ * in order of arrival and one row per membership, exactly as the Postgres
+ * store does, so the two answer
  * alike: an identity is unique in the deployment, a membership is unique for
  * a tenant and an account, the owner of a verified email is the oldest
  * identity of a trusted provider that verified it, and an account emptied by
@@ -26,7 +33,8 @@ const pairKey = (tenant: string, accountId: string): string =>
  * rows, which is fine at the size of a test.
  */
 export function createMemoryAccountStore(): AccountStore {
-	const tenants = new Map<string, StoredTenant>();
+	const tenants = new Map<string, TenantRow>();
+	const signingKeys = new Map<string, readonly StoredSigningKey[]>();
 	const accounts = new Map<string, StoredAccount>();
 	const identities = new Map<string, IdentityRow>();
 	const memberships = new Map<string, StoredMembership>();
@@ -90,16 +98,33 @@ export function createMemoryAccountStore(): AccountStore {
 	const distinctAccounts = (rows: readonly IdentityRow[]): string[] =>
 		Array.from(new Set(rows.map((row) => row.accountId)));
 
+	const rowOf = (tenant: StoredTenant): TenantRow => ({
+		id: tenant.id,
+		disabled: tenant.disabled,
+		version: tenant.version,
+		seal: tenant.seal,
+	});
+
+	const tenantOf = (row: TenantRow): StoredTenant => ({
+		...row,
+		signingKeys: (signingKeys.get(row.id) ?? []).map((key) => ({
+			kid: key.kid,
+			state: key.state,
+		})),
+	});
+
 	return {
 		async getTenant(id) {
-			return tenants.get(id);
+			const row = tenants.get(id);
+
+			return row === undefined ? undefined : tenantOf(row);
 		},
 		async createTenant(tenant) {
 			if (tenants.has(tenant.id)) {
 				return "conflict";
 			}
 
-			tenants.set(tenant.id, tenant);
+			tenants.set(tenant.id, rowOf(tenant));
 
 			return "created";
 		},
@@ -108,7 +133,43 @@ export function createMemoryAccountStore(): AccountStore {
 				return false;
 			}
 
-			tenants.set(tenant.id, tenant);
+			tenants.set(tenant.id, rowOf(tenant));
+
+			return true;
+		},
+		async getSigningKeys(id) {
+			const row = tenants.get(id);
+
+			return row === undefined
+				? undefined
+				: {
+						tenant: tenantOf(row),
+						keys: signingKeys.get(id) ?? [],
+						now: Date.now(),
+					};
+		},
+		async setSigningKeys(tenant, expectedSeal, keys) {
+			if (tenants.get(tenant.id)?.seal !== expectedSeal) {
+				return false;
+			}
+
+			const now = Date.now();
+			const before = signingKeys.get(tenant.id) ?? [];
+
+			tenants.set(tenant.id, rowOf(tenant));
+			signingKeys.set(
+				tenant.id,
+				keys
+					.map((key) => ({
+						kid: key.kid,
+						state: key.state,
+						privateKey: key.privateKey,
+						publishedAtMilliseconds:
+							before.find((kept) => kept.kid === key.kid)
+								?.publishedAtMilliseconds ?? now,
+					}))
+					.sort(byKid),
+			);
 
 			return true;
 		},

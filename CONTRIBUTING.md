@@ -38,4 +38,4 @@ Comments other than JSDoc are stripped from code when it is committed (the `noco
 
 ## Where the decisions are
 
-`docs/vision-review.md` holds the plan and the decisions; `docs/issuance.md` says who can issue access and which test holds each guarantee; each stage has its own document (`docs/stage-1-accounts.md`, `docs/stage-2-grants.md`).
+`docs/vision-review.md` holds the plan and the decisions; `docs/issuance.md` says who can issue access and which test holds each guarantee; each stage has its own document (`docs/stage-1-accounts.md`, `docs/stage-2-grants.md`, `docs/stage-3-oauth.md`).

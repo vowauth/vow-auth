@@ -1,5 +1,7 @@
 import type {
 	AccountStore,
+	NewSigningKey,
+	SigningKeyState,
 	StoredAccount,
 	StoredIdentity,
 	StoredMembership,
@@ -17,6 +19,8 @@ const unique = (prefix: string): string => `${prefix}${crypto.randomUUID()}`;
 const tenantOf = (id = unique("tenant-")): StoredTenant => ({
 	id,
 	disabled: false,
+	version: 1,
+	signingKeys: [],
 	seal: unique("seal-"),
 });
 
@@ -55,8 +59,33 @@ const membershipOf = (
 
 const uniqueEmail = (): string => `${crypto.randomUUID()}@example.com`;
 
+const keyOf = (kid: string, state: SigningKeyState): NewSigningKey => ({
+	kid,
+	state,
+	privateKey: unique("sealed-"),
+});
+
+const byKid = (left: { kid: string }, right: { kid: string }): number =>
+	left.kid < right.kid ? -1 : left.kid > right.kid ? 1 : 0;
+
+/** The tenant as the store lists it after its keys became `keys`. */
+const withKeys = (
+	tenant: StoredTenant,
+	keys: readonly NewSigningKey[],
+	version: number,
+): StoredTenant => ({
+	...tenant,
+	version,
+	signingKeys: [...keys].sort(byKid).map(({ kid, state }) => ({ kid, state })),
+	seal: unique("seal-"),
+});
+
+const withoutTime = (keys: readonly NewSigningKey[] = []) =>
+	keys.map(({ kid, state, privateKey }) => ({ kid, state, privateKey }));
+
 /**
- * Defines the tests every `AccountStore` must pass: an identity is unique in
+ * Defines the tests every `AccountStore` must pass: a tenant and its signing
+ * keys are read and written at once, an identity is unique in
  * the deployment and its first writer wins, a membership is unique for a
  * tenant and an account, creating an account leaves nothing behind on a
  * conflict, compare-and-set changes only the row the caller read, an
@@ -105,17 +134,204 @@ export function accountStoreContract(
 			);
 			expect(await store.getTenant(tenant.id)).toEqual(tenant);
 
-			const disabled = { ...tenant, disabled: true, seal: unique("seal-") };
+			const disabled = {
+				...tenant,
+				disabled: true,
+				version: 2,
+				seal: unique("seal-"),
+			};
 
 			expect(await store.setTenant(disabled, "not-the-seal")).toBe(false);
 			expect(await store.setTenant(disabled, tenant.seal)).toBe(true);
 			expect(await store.getTenant(tenant.id)).toEqual(disabled);
 
-			const enabled = { ...tenant, seal: unique("seal-") };
+			const enabled = { ...tenant, version: 3, seal: unique("seal-") };
 
 			expect(await store.setTenant(enabled, tenant.seal)).toBe(false);
 			expect(await store.setTenant(enabled, disabled.seal)).toBe(true);
 			expect(await store.getTenant(tenant.id)).toEqual(enabled);
+		});
+
+		test("a new tenant has no signing keys, whatever its record lists, and gets them only from the seal that was read, with the tenant", async () => {
+			const store = await options.create();
+			const tenant = tenantOf();
+			const keys = [keyOf("b-kid", "current"), keyOf("A-kid", "next")];
+			const written = withKeys(tenant, keys, 2);
+
+			expect(await store.getSigningKeys(tenant.id)).toBeUndefined();
+			expect(await store.setSigningKeys(written, tenant.seal, keys)).toBe(
+				false,
+			);
+			expect(
+				await store.createTenant({
+					...tenant,
+					signingKeys: [{ kid: "listed", state: "current" }],
+				}),
+			).toBe("created");
+
+			const empty = await store.getSigningKeys(tenant.id);
+
+			expect(empty?.tenant).toEqual(tenant);
+			expect(empty?.keys).toEqual([]);
+			expect(await store.setSigningKeys(written, "not-the-seal", keys)).toBe(
+				false,
+			);
+			expect(await store.getSigningKeys(tenant.id)).toMatchObject({
+				tenant,
+				keys: [],
+			});
+			expect(await store.setSigningKeys(written, tenant.seal, keys)).toBe(true);
+
+			const reading = await store.getSigningKeys(tenant.id);
+
+			expect(reading?.tenant).toEqual(written);
+			expect(await store.getTenant(tenant.id)).toEqual(written);
+			expect(withoutTime(reading?.keys)).toEqual(
+				withoutTime([...keys].sort(byKid)),
+			);
+
+			for (const key of reading?.keys ?? []) {
+				expect(key.publishedAtMilliseconds).toBeGreaterThanOrEqual(
+					empty?.now ?? Number.POSITIVE_INFINITY,
+				);
+				expect(key.publishedAtMilliseconds).toBeLessThanOrEqual(
+					reading?.now ?? 0,
+				);
+			}
+		});
+
+		test("the signing keys of a tenant are listed by kid as JavaScript sorts strings", async () => {
+			const store = await options.create();
+			const tenant = tenantOf();
+			const keys = ["b", "B", "_x", "-x", "a1", "A1"].map((kid) =>
+				keyOf(kid, "previous"),
+			);
+
+			await store.createTenant(tenant);
+			await store.setSigningKeys(withKeys(tenant, keys, 2), tenant.seal, keys);
+
+			const order = ["-x", "A1", "B", "_x", "a1", "b"];
+
+			expect(
+				(await store.getTenant(tenant.id))?.signingKeys.map((key) => key.kid),
+			).toEqual(order);
+			expect(
+				(await store.getSigningKeys(tenant.id))?.keys.map((key) => key.kid),
+			).toEqual(order);
+		});
+
+		test("a key that stays keeps the time it was published, a new one is published at the store's time, and one left out is deleted", async () => {
+			const store = await options.create();
+			const tenant = tenantOf();
+			const first = [keyOf("A", "current"), keyOf("B", "next")];
+			const firstTenant = withKeys(tenant, first, 2);
+
+			await store.createTenant(tenant);
+			await store.setSigningKeys(firstTenant, tenant.seal, first);
+
+			const before = await store.getSigningKeys(tenant.id);
+			const publishedAt = (kid: string) =>
+				before?.keys.find((key) => key.kid === kid)?.publishedAtMilliseconds;
+			const [a, b] = first;
+
+			if (a === undefined || b === undefined) {
+				throw new Error("two keys were written");
+			}
+
+			const second = [
+				{ ...b, state: "current" as const },
+				{ ...a, state: "previous" as const },
+				keyOf("C", "next"),
+			];
+			const secondTenant = withKeys(tenant, second, 3);
+
+			expect(
+				await store.setSigningKeys(secondTenant, firstTenant.seal, second),
+			).toBe(true);
+
+			const after = await store.getSigningKeys(tenant.id);
+
+			expect(withoutTime(after?.keys)).toEqual(
+				withoutTime([...second].sort(byKid)),
+			);
+			expect(after?.keys.map((key) => key.publishedAtMilliseconds)).toEqual([
+				publishedAt("A"),
+				publishedAt("B"),
+				expect.any(Number),
+			]);
+			expect(after?.keys[2]?.publishedAtMilliseconds).toBeGreaterThanOrEqual(
+				before?.now ?? Number.POSITIVE_INFINITY,
+			);
+
+			const third = second.filter((key) => key.kid !== "A");
+
+			expect(
+				await store.setSigningKeys(
+					withKeys(tenant, third, 4),
+					secondTenant.seal,
+					third,
+				),
+			).toBe(true);
+			expect(
+				(await store.getSigningKeys(tenant.id))?.keys.map((key) => key.kid),
+			).toEqual(["B", "C"]);
+		});
+
+		test("writing the tenant alone leaves its signing keys as they are", async () => {
+			const store = await options.create();
+			const tenant = tenantOf();
+			const keys = [keyOf("A", "current"), keyOf("B", "next")];
+			const withSigningKeys = withKeys(tenant, keys, 2);
+
+			await store.createTenant(tenant);
+			await store.setSigningKeys(withSigningKeys, tenant.seal, keys);
+
+			const disabled = {
+				...withSigningKeys,
+				disabled: true,
+				version: 3,
+				signingKeys: [],
+				seal: unique("seal-"),
+			};
+
+			expect(await store.setTenant(disabled, withSigningKeys.seal)).toBe(true);
+
+			const reading = await store.getSigningKeys(tenant.id);
+
+			expect(reading?.tenant).toEqual({
+				...disabled,
+				signingKeys: withSigningKeys.signingKeys,
+			});
+			expect(withoutTime(reading?.keys)).toEqual(withoutTime(keys));
+		});
+
+		test("of writes of the signing keys from the same seal, exactly one wins, also at once", async () => {
+			const store = await options.create();
+			const tenant = tenantOf();
+
+			await store.createTenant(tenant);
+
+			const attempts = Array.from({ length: 8 }, (_, index) => {
+				const keys = [
+					keyOf(`current-${index}`, "current"),
+					keyOf(`next-${index}`, "next"),
+				];
+
+				return { keys, tenant: withKeys(tenant, keys, 2) };
+			});
+			const results = await Promise.all(
+				attempts.map((attempt) =>
+					store.setSigningKeys(attempt.tenant, tenant.seal, attempt.keys),
+				),
+			);
+
+			expect(results.filter(Boolean)).toHaveLength(1);
+
+			const winner = attempts[results.indexOf(true)];
+			const reading = await store.getSigningKeys(tenant.id);
+
+			expect(reading?.tenant).toEqual(winner?.tenant);
+			expect(withoutTime(reading?.keys)).toEqual(withoutTime(winner?.keys));
 		});
 
 		test("an account comes with its first identity and membership, and each is found again", async () => {

@@ -236,6 +236,8 @@ test("no part of the core issues anything for its caller", () => {
 		"create",
 		"disable",
 		"enable",
+		"revokeSigningKey",
+		"rotateSigningKey",
 	]);
 	expect(auth.factors).toEqual({ email: {} });
 	expect(Object.isFrozen(auth.factors)).toBe(true);
