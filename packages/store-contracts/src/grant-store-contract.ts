@@ -77,7 +77,7 @@ const agentOf = (
 
 /**
  * Defines the tests every `GrantStore` must pass: a session is found by the
- * hash of its token with its entry into the tenant asked for, the live entry
+ * hash of its token, or by its id, with its entry into the tenant asked for, the live entry
  * before a revoked one; an entry is unique for a session and a tenant while
  * it lives; an agent is found with the session it is bound to; the idle end
  * of a session never moves back nor past its end; each level of revocation
@@ -204,6 +204,38 @@ export function grantStoreContract(
 					?.entry,
 			).toBeUndefined();
 			expect(await store.findSession(unique("hash-"), tenant)).toBeUndefined();
+		});
+
+		test("a session is read by its id as by its token, and an id of any other grant reads nothing", async () => {
+			const { store, tenant, other, all } = await createTree();
+			const byToken = await store.findSession(
+				all.onLaptop.tokenHash ?? "",
+				tenant,
+			);
+			const byId = await store.getSession(all.onLaptop.id, tenant);
+
+			expect(byId?.session).toEqual(byToken?.session);
+			expect(byId?.entry).toEqual(all.inTenant);
+			expect(typeof byId?.now).toBe("number");
+			expect((await store.getSession(all.onLaptop.id, other))?.entry).toEqual(
+				all.inOther,
+			);
+			expect(
+				(await store.getSession(all.onLaptop.id, undefined))?.entry,
+			).toBeUndefined();
+
+			for (const grant of [all.inTenant, all.bound, all.free]) {
+				expect(await store.getSession(grant.id, tenant)).toBeUndefined();
+			}
+
+			expect(await store.getSession(unique("grant-"), tenant)).toBeUndefined();
+
+			await store.revoke({ scope: "session", id: all.onLaptop.id });
+
+			const revoked = await store.getSession(all.onLaptop.id, tenant);
+
+			expect(revoked?.session.revoked).toBe(true);
+			expect(revoked?.entry?.revoked).toBe(true);
 		});
 
 		test("an entry is unique for a session and a tenant while it lives, and the live one is found first", async () => {

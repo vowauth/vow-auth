@@ -18,6 +18,7 @@ import { generateSecret, hashSecret } from "../shared/secret.js";
 import type {
 	GrantStore,
 	RevocationLevel,
+	SessionReading,
 	StoredGrant,
 } from "./grant-store.js";
 
@@ -198,16 +199,11 @@ export function createGrants(options: GrantsOptions) {
 	const reasonOf = (grant: StoredGrant): string =>
 		grant.revoked ? AUDIT_REASONS.revoked : AUDIT_REASONS.expired;
 
-	const open = async (
-		token: string,
+	const inspect = async (
+		reading: SessionReading | undefined,
 		tenant: string | undefined,
+		used: boolean,
 	): Promise<Result<OpenSession>> => {
-		if (!looksLike(token, SESSION_PREFIX)) {
-			return refuse(AUDIT_REASONS.malformed, tenant ?? "", "");
-		}
-
-		const reading = await store.findSession(await hashSecret(token), tenant);
-
 		if (reading === undefined) {
 			return refuse(AUDIT_REASONS.notFound, tenant ?? "", "");
 		}
@@ -253,7 +249,7 @@ export function createGrants(options: GrantsOptions) {
 
 		const idleEnd = session.idleExpiresAtMilliseconds;
 
-		if (idleEnd !== undefined && idleEnd - now < idleMilliseconds / 2) {
+		if (used && idleEnd !== undefined && idleEnd - now < idleMilliseconds / 2) {
 			await store.extendSession(
 				session.id,
 				Math.min(now + idleMilliseconds, session.expiresAtMilliseconds),
@@ -263,21 +259,26 @@ export function createGrants(options: GrantsOptions) {
 		return succeed({ session, entry, proofs, now });
 	};
 
-	const verify = async (
+	const open = async (
 		token: string,
+		tenant: string | undefined,
+	): Promise<Result<OpenSession>> => {
+		if (!looksLike(token, SESSION_PREFIX)) {
+			return refuse(AUDIT_REASONS.malformed, tenant ?? "", "");
+		}
+
+		return inspect(
+			await store.findSession(await hashSecret(token), tenant),
+			tenant,
+			true,
+		);
+	};
+
+	const verifiedIn = async (
+		opened: OpenSession,
 		tenant: string,
 	): Promise<Result<VerifiedSession>> => {
-		if (!isStorableText(tenant)) {
-			return refuse(AUDIT_REASONS.malformed, "", "");
-		}
-
-		const opened = await open(token, tenant);
-
-		if (!opened.ok) {
-			return opened;
-		}
-
-		const { session, entry, proofs, now } = opened.value;
+		const { session, entry, proofs, now } = opened;
 
 		if (entry === undefined || entry.subjectId === undefined) {
 			return refuse(AUDIT_REASONS.notFound, tenant, "", {
@@ -306,6 +307,48 @@ export function createGrants(options: GrantsOptions) {
 				now - session.authenticatedAtMilliseconds,
 			),
 		});
+	};
+
+	const verify = async (
+		token: string,
+		tenant: string,
+	): Promise<Result<VerifiedSession>> => {
+		if (!isStorableText(tenant)) {
+			return refuse(AUDIT_REASONS.malformed, "", "");
+		}
+
+		const opened = await open(token, tenant);
+
+		return opened.ok ? verifiedIn(opened.value, tenant) : opened;
+	};
+
+	/**
+	 * Whether the session with this id is live in the tenant, and who it is
+	 * there, with the same checks as `verify` but without its token. It does not
+	 * count as a use, so the idle end stays where it is. An id is a name, not a
+	 * secret: this tells what was bound to the session before, for a binding
+	 * such as the authorization server's own session, and must never take the
+	 * place of `verify` for a request.
+	 */
+	const check = async (
+		session: string,
+		tenant: string,
+	): Promise<Result<VerifiedSession>> => {
+		if (!isStorableText(tenant) || !isStorableText(session)) {
+			return refuse(AUDIT_REASONS.malformed, "", "");
+		}
+
+		const reading = await store.getSession(session, tenant);
+
+		if (reading !== undefined && reading.session.id !== session) {
+			return refuse(AUDIT_REASONS.invalidRecord, tenant, "", {
+				grant: "session",
+			});
+		}
+
+		const opened = await inspect(reading, tenant, false);
+
+		return opened.ok ? verifiedIn(opened.value, tenant) : opened;
 	};
 
 	const revokeRecorded = async (level: RevocationLevel): Promise<void> => {
@@ -404,6 +447,7 @@ export function createGrants(options: GrantsOptions) {
 			return succeed(token);
 		},
 		verify,
+		check,
 		open,
 		/**
 		 * Adds an entry into a tenant to a live session. `conflict` when the

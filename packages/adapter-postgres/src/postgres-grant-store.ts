@@ -2,6 +2,7 @@ import type {
 	GrantKind,
 	GrantStore,
 	RevocationLevel,
+	SessionReading,
 	StoredGrant,
 } from "@vow-auth/core";
 import {
@@ -53,7 +54,7 @@ const INSERT_ONE = `insert into vow_auth_grants (${INSERT_COLUMNS})
 	on conflict do nothing
 	returning id`;
 
-const FIND_SESSION = `select ${GRANT_COLUMNS}, ${ENTRY_COLUMNS}, ${SERVER_NOW_MILLISECONDS} as now
+const SESSION_WITH_ENTRY = `select ${GRANT_COLUMNS}, ${ENTRY_COLUMNS}, ${SERVER_NOW_MILLISECONDS} as now
 	from vow_auth_grants as g
 	left join lateral (
 		select * from vow_auth_grants as candidate
@@ -63,7 +64,11 @@ const FIND_SESSION = `select ${GRANT_COLUMNS}, ${ENTRY_COLUMNS}, ${SERVER_NOW_MI
 			candidate.created_at_milliseconds desc
 		limit 1
 	) as e on true
-	where g.token_hash = $1`;
+	where`;
+
+const FIND_SESSION = `${SESSION_WITH_ENTRY} g.token_hash = $1`;
+
+const GET_SESSION = `${SESSION_WITH_ENTRY} g.id = $1 and g.kind = 'session'`;
 
 const FIND_AGENT = `select ${GRANT_COLUMNS}, ${SESSION_COLUMNS}, ${SERVER_NOW_MILLISECONDS} as now
 	from vow_auth_grants as g
@@ -187,13 +192,29 @@ const revocationOf = (
  * Grant store on Postgres. Every method is one statement. A session and its
  * first entry go in together; an entry is unique for a session and a tenant
  * among the live ones, by a partial unique index, so a revoked entry leaves
- * room for a new one. A session is read with its entry, and an agent with its
- * session, by one query that also carries the server's clock. A revocation
+ * room for a new one. A session is read with its entry, by the hash of its
+ * token or by its id, and an agent with its session, by one query that also
+ * carries the server's clock. A revocation
  * is one update that sets the mark once and never clears it; the device and
  * the root session kept on every grant bound to a session make each level a
  * plain condition, so no level walks the tree. The times are the server's.
  */
 export function createPostgresGrantStore(run: PostgresRunner): GrantStore {
+	const readSession = async (
+		statement: string,
+		key: string,
+		tenant: string | undefined,
+	): Promise<SessionReading | undefined> => {
+		const [row] = await run(statement, [key, tenant ?? null]);
+		const session = row === undefined ? undefined : grantOf(row, "g");
+
+		if (row === undefined || session === undefined) {
+			return undefined;
+		}
+
+		return { session, entry: grantOf(row, "e"), now: toNumber(row.now) };
+	};
+
 	return {
 		async now() {
 			const [row] = await run(NOW, []);
@@ -216,16 +237,9 @@ export function createPostgresGrantStore(run: PostgresRunner): GrantStore {
 				throw error;
 			}
 		},
-		async findSession(tokenHash, tenant) {
-			const [row] = await run(FIND_SESSION, [tokenHash, tenant ?? null]);
-			const session = row === undefined ? undefined : grantOf(row, "g");
-
-			if (row === undefined || session === undefined) {
-				return undefined;
-			}
-
-			return { session, entry: grantOf(row, "e"), now: toNumber(row.now) };
-		},
+		findSession: (tokenHash, tenant) =>
+			readSession(FIND_SESSION, tokenHash, tenant),
+		getSession: (id, tenant) => readSession(GET_SESSION, id, tenant),
 		async findAgent(tokenHash) {
 			const [row] = await run(FIND_AGENT, [tokenHash]);
 			const agent = row === undefined ? undefined : grantOf(row, "g");

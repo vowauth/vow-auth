@@ -1,4 +1,9 @@
-import type { GrantStore, RevocationLevel, StoredGrant } from "@vow-auth/core";
+import type {
+	GrantStore,
+	RevocationLevel,
+	SessionReading,
+	StoredGrant,
+} from "@vow-auth/core";
 
 const marks = (level: RevocationLevel, grant: StoredGrant): boolean => {
 	switch (level.scope) {
@@ -65,6 +70,21 @@ export function createMemoryGrantStore(): GrantStore {
 		return id === undefined ? undefined : grants.get(id);
 	};
 
+	const readingOf = (
+		session: StoredGrant | undefined,
+		tenant: string | undefined,
+	): SessionReading | undefined => {
+		if (session === undefined) {
+			return undefined;
+		}
+
+		const entries = tenant === undefined ? [] : entriesOf(session.id, tenant);
+		const entry =
+			entries.find((candidate) => !candidate.revoked) ?? entries.at(-1);
+
+		return { session, entry, now: Date.now() };
+	};
+
 	return {
 		async now() {
 			return Date.now();
@@ -97,17 +117,15 @@ export function createMemoryGrantStore(): GrantStore {
 			return "created";
 		},
 		async findSession(tokenHash, tenant) {
-			const session = byToken(tokenHash);
+			return readingOf(byToken(tokenHash), tenant);
+		},
+		async getSession(id, tenant) {
+			const session = grants.get(id);
 
-			if (session === undefined) {
-				return undefined;
-			}
-
-			const entries = tenant === undefined ? [] : entriesOf(session.id, tenant);
-			const entry =
-				entries.find((candidate) => !candidate.revoked) ?? entries.at(-1);
-
-			return { session, entry, now: Date.now() };
+			return readingOf(
+				session?.kind === "session" ? session : undefined,
+				tenant,
+			);
 		},
 		async findAgent(tokenHash) {
 			const agent = byToken(tokenHash);

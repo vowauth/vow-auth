@@ -93,6 +93,11 @@ export type GrantStore = {
 		tokenHash: string,
 		tenant: string | undefined,
 	): Promise<SessionReading | undefined>;
+	/** A session by its id, read as `findSession` reads it by its token; `undefined` when no session has this id. */
+	getSession(
+		id: string,
+		tenant: string | undefined,
+	): Promise<SessionReading | undefined>;
 	findAgent(tokenHash: string): Promise<AgentReading | undefined>;
 	extendSession(id: string, idleExpiresAtMilliseconds: number): Promise<void>;
 	revoke(level: RevocationLevel): Promise<number>;
