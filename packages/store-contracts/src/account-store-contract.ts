@@ -305,6 +305,30 @@ export function accountStoreContract(
 			expect(withoutTime(reading?.keys)).toEqual(withoutTime(keys));
 		});
 
+		test("writing the signing keys writes the tenant as given, so a disabled tenant stays disabled", async () => {
+			const store = await options.create();
+			const tenant = tenantOf();
+			const disabled = {
+				...tenant,
+				disabled: true,
+				version: 2,
+				seal: unique("seal-"),
+			};
+			const keys = [keyOf("A", "current"), keyOf("B", "next")];
+			const withSigningKeys = withKeys(disabled, keys, 3);
+
+			await store.createTenant(tenant);
+			await store.setTenant(disabled, tenant.seal);
+
+			expect(
+				await store.setSigningKeys(withSigningKeys, disabled.seal, keys),
+			).toBe(true);
+			expect(await store.getTenant(tenant.id)).toEqual(withSigningKeys);
+			expect((await store.getSigningKeys(tenant.id))?.tenant.disabled).toBe(
+				true,
+			);
+		});
+
 		test("of writes of the signing keys from the same seal, exactly one wins, also at once", async () => {
 			const store = await options.create();
 			const tenant = tenantOf();

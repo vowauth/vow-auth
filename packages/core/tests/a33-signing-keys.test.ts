@@ -219,6 +219,135 @@ test("A33: two rotations at once write one new key set, and the other is refused
 	expect((await store.getTenant("acme"))?.signingKeys).toHaveLength(2);
 });
 
+test("A33: rotating and revoking the keys of a disabled tenant leave it disabled: nobody signs in and its keys do not load", async () => {
+	const { auth, keys, signIn, store } = await createFixture();
+
+	expect((await auth.tenants.disable("acme")).ok).toBe(true);
+
+	const rotated = valueFrom(await auth.tenants.rotateSigningKey("acme"));
+
+	expect((await store.getTenant("acme"))?.disabled).toBe(true);
+	expect(
+		(await auth.tenants.revokeSigningKey("acme", kidIn(rotated, "next"))).ok,
+	).toBe(true);
+	expect((await store.getTenant("acme"))?.disabled).toBe(true);
+	expect(await signIn("acme")).toEqual({ ok: false, error: "no-tenant" });
+	expect(await keys.load("acme")).toEqual({ ok: false, error: "no-tenant" });
+});
+
+/**
+ * A store whose two writes of a race, once armed, wait at a gate until the
+ * test lets them through, one after the other, in the order it chooses. Each
+ * write waits once; later writes go straight to the store.
+ */
+const raceOf = (base: AccountStore) => {
+	const gates = new Map<string, () => void>();
+	const finished = new Map<string, Promise<void>>();
+	const armed = new Set<string>();
+	let bothArrived: () => void = () => undefined;
+	const arrived = new Promise<void>((resolve) => {
+		bothArrived = resolve;
+	});
+
+	const gated =
+		<Input extends unknown[]>(
+			name: string,
+			write: (...input: Input) => Promise<boolean>,
+		) =>
+		async (...input: Input): Promise<boolean> => {
+			if (!armed.delete(name)) {
+				return write(...input);
+			}
+
+			let done: () => void = () => undefined;
+
+			finished.set(
+				name,
+				new Promise<void>((resolve) => {
+					done = resolve;
+				}),
+			);
+
+			await new Promise<void>((release) => {
+				gates.set(name, release);
+
+				if (gates.size === 2) {
+					bothArrived();
+				}
+			});
+
+			try {
+				return await write(...input);
+			} finally {
+				done();
+			}
+		};
+
+	const store: AccountStore = {
+		...base,
+		setTenant: gated("setTenant", base.setTenant),
+		setSigningKeys: gated("setSigningKeys", base.setSigningKeys),
+	};
+
+	return {
+		store,
+		arm: () => {
+			armed.add("setTenant");
+			armed.add("setSigningKeys");
+		},
+		arrived,
+		async letThrough(first: string, second: string) {
+			gates.get(first)?.();
+			await finished.get(first);
+			gates.get(second)?.();
+		},
+	};
+};
+
+test.each([
+	{ first: "setSigningKeys", disabledWins: false },
+	{ first: "setTenant", disabledWins: true },
+])(
+	"A33: a rotation at the same time as disabling never leaves the tenant enabled when disabling succeeded (first write: $first)",
+	async ({ first, disabledWins }) => {
+		const base = createMemoryAccountStore();
+		const race = raceOf(base);
+		const { auth, signIn } = await createFixture({ store: race.store });
+
+		expect((await auth.tenants.create("acme")).ok).toBe(true);
+		expect((await signIn("acme")).ok).toBe(true);
+
+		race.arm();
+
+		const disabling = auth.tenants.disable("acme");
+		const rotating = auth.tenants.rotateSigningKey("acme");
+
+		await race.arrived;
+		await race.letThrough(
+			first,
+			first === "setTenant" ? "setSigningKeys" : "setTenant",
+		);
+
+		const [disabled, rotated] = await Promise.all([disabling, rotating]);
+
+		expect(disabled.ok).toBe(disabledWins);
+		expect(rotated.ok).toBe(!disabledWins);
+		expect(disabledWins ? rotated : disabled).toEqual({
+			ok: false,
+			error: "conflict",
+		});
+		expect((await base.getTenant("acme"))?.disabled).toBe(disabledWins);
+
+		if (disabledWins) {
+			expect(await signIn("acme")).toEqual({ ok: false, error: "no-tenant" });
+		} else {
+			expect((await auth.tenants.disable("acme")).ok).toBe(true);
+			expect((await base.getTenant("acme"))?.disabled).toBe(true);
+			expect(await signIn("acme")).toEqual({ ok: false, error: "no-tenant" });
+		}
+	},
+);
+
 test("A33: the opened keys are ES256 keys named by their RFC 7638 thumbprint, each signs what its public part verifies, and they come with the version of the tenant", async () => {
 	const { auth, keys } = await createFixture();
 
