@@ -1,4 +1,5 @@
 import type {
+	AgentReading,
 	GrantStore,
 	RevocationLevel,
 	SessionReading,
@@ -85,6 +86,20 @@ export function createMemoryGrantStore(): GrantStore {
 		return { session, entry, now: Date.now() };
 	};
 
+	const agentReadingOf = (
+		agent: StoredGrant | undefined,
+	): AgentReading | undefined =>
+		agent === undefined
+			? undefined
+			: {
+					agent,
+					session:
+						agent.sessionId === undefined
+							? undefined
+							: grants.get(agent.sessionId),
+					now: Date.now(),
+				};
+
 	return {
 		async now() {
 			return Date.now();
@@ -128,20 +143,12 @@ export function createMemoryGrantStore(): GrantStore {
 			);
 		},
 		async findAgent(tokenHash) {
-			const agent = byToken(tokenHash);
+			return agentReadingOf(byToken(tokenHash));
+		},
+		async getAgent(id) {
+			const agent = grants.get(id);
 
-			if (agent === undefined) {
-				return undefined;
-			}
-
-			return {
-				agent,
-				session:
-					agent.sessionId === undefined
-						? undefined
-						: grants.get(agent.sessionId),
-				now: Date.now(),
-			};
+			return agentReadingOf(agent?.kind === "agent" ? agent : undefined);
 		},
 		async extendSession(id, idleExpiresAtMilliseconds) {
 			const session = grants.get(id);

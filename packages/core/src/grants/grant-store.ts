@@ -99,6 +99,8 @@ export type GrantStore = {
 		tenant: string | undefined,
 	): Promise<SessionReading | undefined>;
 	findAgent(tokenHash: string): Promise<AgentReading | undefined>;
+	/** An agent by its id, read as `findAgent` reads it by its token; `undefined` when no agent has this id. */
+	getAgent(id: string): Promise<AgentReading | undefined>;
 	extendSession(id: string, idleExpiresAtMilliseconds: number): Promise<void>;
 	revoke(level: RevocationLevel): Promise<number>;
 	/** Deletes every grant of the account, for its deletion: a session keeps the proofs of its sign in. */

@@ -16,6 +16,7 @@ import { own } from "../shared/own.js";
 import { safeParseJson } from "../shared/safe-parse-json.js";
 import { generateSecret, hashSecret } from "../shared/secret.js";
 import type {
+	AgentReading,
 	GrantStore,
 	RevocationLevel,
 	SessionReading,
@@ -391,6 +392,147 @@ export function createGrants(options: GrantsOptions) {
 			revoked: false,
 		});
 
+	const grantAgent = async (
+		sessionToken: string,
+		input: DelegateInput,
+		tokenHash: string | undefined,
+	): Promise<Result<string>> => {
+		const tenant = own(input, "tenant");
+		const agent = own(input, "agent");
+		const timeToLive = own(input, "timeToLive");
+
+		if (
+			!isStorableText(tenant) ||
+			!isStorableText(agent) ||
+			!isDuration(timeToLive) ||
+			timeToLive.milliseconds > maximumMilliseconds
+		) {
+			return fail(ERROR_CODES.invalidRequest);
+		}
+
+		const delegator = await open(sessionToken, tenant);
+
+		if (!delegator.ok) {
+			return fail(ERROR_CODES.invalidSession);
+		}
+
+		const { session, entry, now } = delegator.value;
+
+		if (entry === undefined || entry.revoked || entry.subjectId === undefined) {
+			return fail(ERROR_CODES.invalidSession);
+		}
+
+		const bound = own(input, "boundToSession") === true;
+		const delegation = generateSecret();
+
+		await report(audit, {
+			event: AUDIT_EVENTS.delegationGrant,
+			outcome: AUDIT_OUTCOMES.success,
+			reason: AUDIT_REASONS.issued,
+			tenant,
+			subject: entry.subjectId,
+			detail: {
+				agent,
+				delegation,
+				bound: String(bound),
+				token: tokenHash === undefined ? "none" : "agent",
+			},
+		});
+
+		const expires = now + timeToLive.milliseconds;
+		const granted = await store.createGrant(
+			await records.grant({
+				id: delegation,
+				kind: "agent",
+				tokenHash,
+				accountId: session.accountId,
+				tenant,
+				subjectId: entry.subjectId,
+				device: bound ? session.device : undefined,
+				agent,
+				parentId: bound ? entry.id : undefined,
+				sessionId: bound ? session.id : undefined,
+				proofs: undefined,
+				authenticatedAtMilliseconds: now,
+				expiresAtMilliseconds: bound
+					? Math.min(expires, session.expiresAtMilliseconds)
+					: expires,
+				idleExpiresAtMilliseconds: undefined,
+				revoked: false,
+			}),
+		);
+
+		return granted === "created"
+			? succeed(delegation)
+			: fail(ERROR_CODES.conflict);
+	};
+
+	const inspectAgent = async (
+		reading: AgentReading | undefined,
+	): Promise<Result<VerifiedAgent>> => {
+		if (reading === undefined) {
+			return refuse(AUDIT_REASONS.notFound, "", "");
+		}
+
+		const { agent, session, now } = reading;
+		const tenant = agent.tenant ?? "";
+		const subject = agent.subjectId ?? "";
+
+		if (
+			agent.kind !== "agent" ||
+			agent.agent === undefined ||
+			agent.tenant === undefined ||
+			agent.subjectId === undefined ||
+			(await records.checkGrant(agent)) === "invalid"
+		) {
+			return refuse(AUDIT_REASONS.invalidRecord, tenant, subject, {
+				grant: "agent",
+			});
+		}
+
+		const detail = { agent: agent.agent, delegation: agent.id };
+
+		if (!alive(agent, now)) {
+			return refuse(reasonOf(agent), tenant, subject, {
+				...detail,
+				scope: "delegation",
+			});
+		}
+
+		if (agent.sessionId !== undefined) {
+			if (
+				session === undefined ||
+				session.id !== agent.sessionId ||
+				(await records.checkGrant(session)) === "invalid"
+			) {
+				return refuse(AUDIT_REASONS.invalidRecord, tenant, subject, {
+					...detail,
+					grant: "session",
+				});
+			}
+
+			if (!alive(session, now)) {
+				return refuse(reasonOf(session), tenant, subject, {
+					...detail,
+					scope: "session",
+				});
+			}
+		}
+
+		return succeed({
+			account: agent.accountId,
+			tenant: agent.tenant,
+			subject: agent.subjectId,
+			agent: agent.agent,
+			delegation: agent.id,
+			boundTo:
+				agent.sessionId === undefined
+					? undefined
+					: { device: agent.device ?? "", session: agent.sessionId },
+			delegatedAtMilliseconds: agent.authenticatedAtMilliseconds,
+		});
+	};
+
 	return {
 		/**
 		 * Creates the account session of a sign in with its entry into the
@@ -503,143 +645,60 @@ export function createGrants(options: GrantsOptions) {
 			sessionToken: string,
 			input: DelegateInput,
 		): Promise<Result<Delegation>> {
-			const tenant = own(input, "tenant");
-			const agent = own(input, "agent");
-			const timeToLive = own(input, "timeToLive");
-
-			if (
-				!isStorableText(tenant) ||
-				!isStorableText(agent) ||
-				!isDuration(timeToLive) ||
-				timeToLive.milliseconds > maximumMilliseconds
-			) {
-				return fail(ERROR_CODES.invalidRequest);
-			}
-
-			const delegator = await open(sessionToken, tenant);
-
-			if (!delegator.ok) {
-				return fail(ERROR_CODES.invalidSession);
-			}
-
-			const { session, entry, now } = delegator.value;
-
-			if (
-				entry === undefined ||
-				entry.revoked ||
-				entry.subjectId === undefined
-			) {
-				return fail(ERROR_CODES.invalidSession);
-			}
-
-			const bound = own(input, "boundToSession") === true;
-			const delegation = generateSecret();
-
-			await report(audit, {
-				event: AUDIT_EVENTS.delegationGrant,
-				outcome: AUDIT_OUTCOMES.success,
-				reason: AUDIT_REASONS.issued,
-				tenant,
-				subject: entry.subjectId,
-				detail: { agent, delegation, bound: String(bound) },
-			});
-
 			const token = tokenOf(AGENT_PREFIX);
-			const expires = now + timeToLive.milliseconds;
-			const granted = await store.createGrant(
-				await records.grant({
-					id: delegation,
-					kind: "agent",
-					tokenHash: await hashSecret(token),
-					accountId: session.accountId,
-					tenant,
-					subjectId: entry.subjectId,
-					device: bound ? session.device : undefined,
-					agent,
-					parentId: bound ? entry.id : undefined,
-					sessionId: bound ? session.id : undefined,
-					proofs: undefined,
-					authenticatedAtMilliseconds: now,
-					expiresAtMilliseconds: bound
-						? Math.min(expires, session.expiresAtMilliseconds)
-						: expires,
-					idleExpiresAtMilliseconds: undefined,
-					revoked: false,
-				}),
+			const granted = await grantAgent(
+				sessionToken,
+				input,
+				await hashSecret(token),
 			);
 
-			return granted === "created"
-				? succeed({ token, delegation })
-				: fail(ERROR_CODES.conflict);
+			return granted.ok
+				? succeed({ token, delegation: granted.value })
+				: granted;
 		},
+		/**
+		 * Grants a client of the authorization server what `delegate` grants an
+		 * agent, but with no token of its own: the server's own tokens carry the
+		 * id this answers. The grant lives under the session's entry into the
+		 * tenant when it is bound to the session, and on its own otherwise, as
+		 * an offline grant does; every level of revocation reaches it as it
+		 * reaches an agent.
+		 */
+		grantClient: (
+			sessionToken: string,
+			input: DelegateInput,
+		): Promise<Result<string>> => grantAgent(sessionToken, input, undefined),
 		async verifyAgent(token: string): Promise<Result<VerifiedAgent>> {
 			if (!looksLike(token, AGENT_PREFIX)) {
 				return refuse(AUDIT_REASONS.malformed, "", "");
 			}
 
-			const reading = await store.findAgent(await hashSecret(token));
-
-			if (reading === undefined) {
-				return refuse(AUDIT_REASONS.notFound, "", "");
+			return inspectAgent(await store.findAgent(await hashSecret(token)));
+		},
+		/**
+		 * Whether the agent grant with this id is live, and whom it acts for,
+		 * with the same checks as `verifyAgent` but without its token: for the
+		 * authorization server, whose tokens carry the grant's id. An id is a
+		 * name, not a secret; this never takes the place of `verifyAgent` for a
+		 * request.
+		 */
+		async checkAgent(delegation: string): Promise<Result<VerifiedAgent>> {
+			if (!isStorableText(delegation)) {
+				return refuse(AUDIT_REASONS.malformed, "", "");
 			}
 
-			const { agent, session, now } = reading;
-			const tenant = agent.tenant ?? "";
-			const subject = agent.subjectId ?? "";
+			const reading = await store.getAgent(delegation);
 
-			if (
-				agent.kind !== "agent" ||
-				agent.agent === undefined ||
-				agent.tenant === undefined ||
-				agent.subjectId === undefined ||
-				(await records.checkGrant(agent)) === "invalid"
-			) {
-				return refuse(AUDIT_REASONS.invalidRecord, tenant, subject, {
-					grant: "agent",
-				});
+			if (reading !== undefined && reading.agent.id !== delegation) {
+				return refuse(
+					AUDIT_REASONS.invalidRecord,
+					reading.agent.tenant ?? "",
+					reading.agent.subjectId ?? "",
+					{ grant: "agent" },
+				);
 			}
 
-			const detail = { agent: agent.agent, delegation: agent.id };
-
-			if (!alive(agent, now)) {
-				return refuse(reasonOf(agent), tenant, subject, {
-					...detail,
-					scope: "delegation",
-				});
-			}
-
-			if (agent.sessionId !== undefined) {
-				if (
-					session === undefined ||
-					session.id !== agent.sessionId ||
-					(await records.checkGrant(session)) === "invalid"
-				) {
-					return refuse(AUDIT_REASONS.invalidRecord, tenant, subject, {
-						...detail,
-						grant: "session",
-					});
-				}
-
-				if (!alive(session, now)) {
-					return refuse(reasonOf(session), tenant, subject, {
-						...detail,
-						scope: "session",
-					});
-				}
-			}
-
-			return succeed({
-				account: agent.accountId,
-				tenant: agent.tenant,
-				subject: agent.subjectId,
-				agent: agent.agent,
-				delegation: agent.id,
-				boundTo:
-					agent.sessionId === undefined
-						? undefined
-						: { device: agent.device ?? "", session: agent.sessionId },
-				delegatedAtMilliseconds: agent.authenticatedAtMilliseconds,
-			});
+			return inspectAgent(reading);
 		},
 	};
 }

@@ -1,4 +1,5 @@
 import type {
+	AgentReading,
 	GrantKind,
 	GrantStore,
 	RevocationLevel,
@@ -70,10 +71,14 @@ const FIND_SESSION = `${SESSION_WITH_ENTRY} g.token_hash = $1`;
 
 const GET_SESSION = `${SESSION_WITH_ENTRY} g.id = $1 and g.kind = 'session'`;
 
-const FIND_AGENT = `select ${GRANT_COLUMNS}, ${SESSION_COLUMNS}, ${SERVER_NOW_MILLISECONDS} as now
+const AGENT_WITH_SESSION = `select ${GRANT_COLUMNS}, ${SESSION_COLUMNS}, ${SERVER_NOW_MILLISECONDS} as now
 	from vow_auth_grants as g
 	left join vow_auth_grants as s on s.id = g.session_id
-	where g.token_hash = $1`;
+	where`;
+
+const FIND_AGENT = `${AGENT_WITH_SESSION} g.token_hash = $1`;
+
+const GET_AGENT = `${AGENT_WITH_SESSION} g.id = $1 and g.kind = 'agent'`;
 
 const EXTEND = `update vow_auth_grants
 	set idle_expires_at_milliseconds = least(
@@ -193,8 +198,8 @@ const revocationOf = (
  * first entry go in together; an entry is unique for a session and a tenant
  * among the live ones, by a partial unique index, so a revoked entry leaves
  * room for a new one. A session is read with its entry, by the hash of its
- * token or by its id, and an agent with its session, by one query that also
- * carries the server's clock. A revocation
+ * token or by its id, and an agent with its session, by its token or by its
+ * id, by one query that also carries the server's clock. A revocation
  * is one update that sets the mark once and never clears it; the device and
  * the root session kept on every grant bound to a session make each level a
  * plain condition, so no level walks the tree. The times are the server's.
@@ -213,6 +218,20 @@ export function createPostgresGrantStore(run: PostgresRunner): GrantStore {
 		}
 
 		return { session, entry: grantOf(row, "e"), now: toNumber(row.now) };
+	};
+
+	const readAgent = async (
+		statement: string,
+		key: string,
+	): Promise<AgentReading | undefined> => {
+		const [row] = await run(statement, [key]);
+		const agent = row === undefined ? undefined : grantOf(row, "g");
+
+		if (row === undefined || agent === undefined) {
+			return undefined;
+		}
+
+		return { agent, session: grantOf(row, "s"), now: toNumber(row.now) };
 	};
 
 	return {
@@ -240,16 +259,8 @@ export function createPostgresGrantStore(run: PostgresRunner): GrantStore {
 		findSession: (tokenHash, tenant) =>
 			readSession(FIND_SESSION, tokenHash, tenant),
 		getSession: (id, tenant) => readSession(GET_SESSION, id, tenant),
-		async findAgent(tokenHash) {
-			const [row] = await run(FIND_AGENT, [tokenHash]);
-			const agent = row === undefined ? undefined : grantOf(row, "g");
-
-			if (row === undefined || agent === undefined) {
-				return undefined;
-			}
-
-			return { agent, session: grantOf(row, "s"), now: toNumber(row.now) };
-		},
+		findAgent: (tokenHash) => readAgent(FIND_AGENT, tokenHash),
+		getAgent: (id) => readAgent(GET_AGENT, id),
 		async extendSession(id, idleExpiresAtMilliseconds) {
 			await run(EXTEND, [id, idleExpiresAtMilliseconds]);
 		},

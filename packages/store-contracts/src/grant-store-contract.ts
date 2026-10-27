@@ -79,7 +79,8 @@ const agentOf = (
  * Defines the tests every `GrantStore` must pass: a session is found by the
  * hash of its token, or by its id, with its entry into the tenant asked for, the live entry
  * before a revoked one; an entry is unique for a session and a tenant while
- * it lives; an agent is found with the session it is bound to; the idle end
+ * it lives; an agent is found, by its token or its id, with the session it
+ * is bound to; the idle end
  * of a session never moves back nor past its end; each level of revocation
  * marks exactly its grants and everything bound to them; and forgetting an
  * account deletes its grants. Call it inside a test file once per adapter.
@@ -280,6 +281,35 @@ export function grantStoreContract(
 			expect(free?.session).toBeUndefined();
 			expect(typeof free?.now).toBe("number");
 			expect(await store.findAgent(unique("hash-"))).toBeUndefined();
+		});
+
+		test("an agent is read by its id as by its token, also one with no token, and an id of any other grant reads nothing", async () => {
+			const { store, tenant, subject, account, all } = await createTree();
+
+			expect(await store.getAgent(all.bound.id)).toEqual({
+				...(await store.findAgent(all.bound.tokenHash ?? "")),
+				now: expect.any(Number),
+			});
+			expect((await store.getAgent(all.free.id))?.session).toBeUndefined();
+
+			const client = {
+				...agentOf(account, tenant, subject, "app", all.inTenant, all.onLaptop),
+				tokenHash: undefined,
+			};
+
+			expect(await store.createGrant(client)).toBe("created");
+			expect((await store.getAgent(client.id))?.agent).toEqual(client);
+			expect((await store.getAgent(client.id))?.session).toEqual(all.onLaptop);
+
+			for (const grant of [all.onLaptop, all.inTenant]) {
+				expect(await store.getAgent(grant.id)).toBeUndefined();
+			}
+
+			expect(await store.getAgent(unique("grant-"))).toBeUndefined();
+
+			await store.revoke({ scope: "delegation", id: client.id });
+
+			expect((await store.getAgent(client.id))?.agent.revoked).toBe(true);
 		});
 
 		test("the idle end of a session moves forward, never back and never past the end", async () => {
